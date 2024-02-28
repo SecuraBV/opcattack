@@ -22,7 +22,7 @@ class AttackNotPossible(Exception):
 # Common routines.
 
 # Send an OPC request message and receive a response.
-def opc_exchange(sock : socket, request : OpcMessage, response_obj : Optional[OpcMessage]) -> OpcMessage:
+def opc_exchange(sock : socket, request : OpcMessage, response_obj : Optional[OpcMessage] = None) -> OpcMessage:
   with sock.makefile('rwb') as sockio:
     sockio.write(request.to_bytes())
     sockio.flush()
@@ -39,7 +39,7 @@ def connect_and_hello(host : str, port : int) -> socket:
     sendBufferSize=2**16,
     maxMessageSize=2**24,
     maxChunkCount=2**8,
-    endpointUrl=f'opc.tcp://{host}:{port}',
+    endpointUrl=f'opc.tcp://{host}:{port}/',
   ), AckMessage())
   return sock
 
@@ -51,7 +51,7 @@ def simple_requestheader(authToken : NodeId = NodeId(0,0)) -> requestHeader.Type
     returnDiagnostics=0,
     auditEntryId=None,
     timeoutHint=0,
-    additionalHeader=b'',
+    additionalHeader=None,
   )
 
 @dataclass
@@ -71,17 +71,17 @@ def unencrypted_opn(sock: socket) -> ChannelState:
     receiverCertificateThumbprint=None,
     sequenceNumber=1,
     requestId=1,
-    encryptedMessage=openSecureChannelRequest.create(
+    encryptedMessage=openSecureChannelRequest.to_bytes(openSecureChannelRequest.create(
       requestHeader=simple_requestheader(),
       clientProtocolVersion=0,
       requestType=SecurityTokenRequestType.ISSUE,
       securityMode=MessageSecurityMode.NONE,
       clientNonce=None,
       requestedLifetime=3600000,
-    ).to_bytes()
+    ))
   ))
   
-  resp = openSecureChannelResponse.from_bytes(reply.encryptedMessage)
+  resp, _ = openSecureChannelResponse.from_bytes(reply.encryptedMessage)
   return ChannelState(
     sock=sock,
     channel_id=resp.securityToken.channelId,
@@ -98,13 +98,14 @@ def session_exchange(channel : ChannelState,
   msg = ConversationMessage(
     secureChannelId=channel.channel_id,
     tokenId=channel.token_id,
-    encodedPart=encodedConversation.create(
+    encodedPart=encodedConversation.to_bytes(encodedConversation.create(
       sequenceNumber=channel.msg_counter,
       requestId=channel.msg_counter,
-      encodedMessage=reqfield.create(**req_data).to_bytes(),
-    )
+      requestOrResponse=reqfield.to_bytes(reqfield.create(**req_data)),
+    ))
   )
   
+  crypto = channel.crypto
   if crypto:
     # Add padding and signing into encoded message.
     msgbytes = msg.to_bytes()
@@ -131,7 +132,8 @@ def session_exchange(channel : ChannelState,
   channel.msg_counter += 1
     
   # Parse the response.
-  return respfield.from_bytes(encodedConversation.from_bytes(decodedPart).encodedMessage)
+  convo, _ = encodedConversation.from_bytes(decodedPart)
+  return respfield.from_bytes(convo.requestOrResponse)
   
 
 # Relevant endpoint information.
@@ -148,7 +150,7 @@ class EndpointInfo:
 def get_endpoints(host : str, port: int) -> List[EndpointInfo]:
   with connect_and_hello(host, port) as sock:
     chan = unencrypted_opn(sock)
-    resp = session_exchange(sock, chan, getEndpointsRequest, getEndpointsResponse, 
+    resp = session_exchange(chan, getEndpointsRequest, getEndpointsResponse, 
       requestHeader=simple_requestheader(),
       endpointUrl=f'opc.tcp://{host}:{port}',
       localeIds=[],
