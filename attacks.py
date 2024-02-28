@@ -8,10 +8,10 @@ from socket import socket, create_connection
 import sys, os, itertools
 
 # Logging and errors.
-def log(msg : string):
+def log(msg : str):
   print(f'[*] {msg}', file=sys.stderr)
   
-def log_success(msg : string):
+def log_success(msg : str):
   print(f'[+] {msg}')
 
 # Thrown when an attack was not possible due to a configuration that is not vulnerable to it (other exceptions indicate 

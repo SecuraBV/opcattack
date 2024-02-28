@@ -1,12 +1,14 @@
-from abc import ABC
+from abc import ABC, abstractmethod
 import struct
 from typing import *
-from enum import Enum, auto
+from types import NoneType
+from enum import Enum, auto, IntEnum
 from datetime import datetime, timedelta
 from binascii import hexlify
 from collections import namedtuple
 from base64 import b64encode, b64decode
 from uuid import UUID
+from dataclasses import dataclass
 
 # Type vars.
 ValType = TypeVar('ValType')
@@ -103,8 +105,8 @@ class IntField(StructField[int]):
 class DoubleField(StructField[float]):
   default_value = 0.0
   
-  def __init__(self):
-    super().__init__('<d')
+  def __init__(self, floatformat : str = '<d'):
+    super().__init__(floatformat)
     
 class ByteStringField(FieldType[bytes]):
   _lentype = IntField()
@@ -122,6 +124,7 @@ class FixedBytes(FieldType[NoneType]):
   def __init__(self, bytestr : bytes):
     self._bytestr = bytestr
     
+  @property
   def default_value(self):
     return self._bytestr
   
@@ -133,7 +136,7 @@ class FixedBytes(FieldType[NoneType]):
     decodecheck(bytestr.startswith(self._bytestr), f'Expected fixsed bytes {hexlify(self._bytestr)}; instead got {hexlify(bytestr[:len(self._bytestr)])}')
     return None, bytestr[len(self._bytestr):]
   
-class TransformedFieldType(Generic[OriginalValType], FieldType[ValType]):
+class TransformedFieldType(Generic[ValType, OriginalValType], FieldType[ValType]):
   """Use the wire format of an already defined field type and just transform its Python value before and after parsing."""
   def __init__(self, origfield : FieldType[OriginalValType]):
     self._origfield = origfield
@@ -146,6 +149,7 @@ class TransformedFieldType(Generic[OriginalValType], FieldType[ValType]):
   def untransform(self, transformed : ValType) -> OriginalValType:
     ...
     
+  @property
   def default_value(self):
     return self.transform(self._origfield.default_value)
     
@@ -328,6 +332,7 @@ class ObjectField(FieldType[NamedTuple]):
   def create(self, **data):
     return self._Body(**data)
     
+  @property
   def default_value(self):
     return self._Body(**{fname: ftype.default_value for fname, ftype in self._bodyfields})
     
@@ -348,8 +353,14 @@ class ObjectField(FieldType[NamedTuple]):
 
 class EncodableObjectField(ObjectField):
   def __init__(self, name : str, identifier : int, bodyfields : list[tuple[str, FieldType]]):
-    super().__init__(name, [('typeId', NodeIdField(0, identifier)), *bodyfields])
+    super().__init__(name, [('typeId', NodeIdField()), *bodyfields])
     self._id = identifier
+    self._default = super().default_value
+    self._default.typeId.identifier = identifier
+    
+  @property
+  def default_value(self):
+    return self._default
     
   def from_bytes(self, bytestr):
     result, tail = super().from_bytes(bytestr)
@@ -360,7 +371,8 @@ class EnumField(TransformedFieldType[int, IntEnum]):
   def __init__(self, EnumType : Type[IntEnum]):
     super().__init__(IntField())
     self._EnumType = EnumType
-    
+  
+  @property
   def default_value(self):
     return next(iter(self._EnumType.__members__))
   
@@ -390,6 +402,7 @@ class SwitchableObjectField(FieldType[NamedTuple]):
     self._masksize = len(bodyfields) + (8 - len(bodyfields) % 8 if len(bodyfields) % 8 else 0)
     self._maskindices = {fname: index for fname, _, index in bodyfields}
     
+  @property
   def default_value(self):
     return self._Body(**{fname: None for fname, _ in self._bodyfields})
     
@@ -438,6 +451,7 @@ class FixedSizeBytesField(FieldType[bytes]):
   def __init__(self, size):
     self._size = size  
     
+  @property
   def default_value(self):
     return b'\x00' * self._size
   
@@ -453,7 +467,8 @@ class UnsupportedField(FieldType[Any]):
     def fail():
       raise UnsupportedFieldException(name, f'Field type {name} is not supported.')
     self._fail = fail
-    
+  
+  @property
   def default_value(self):
     self._fail()
     
@@ -462,80 +477,6 @@ class UnsupportedField(FieldType[Any]):
     
   def from_bytes(self, bytestr):
     self._fail()
-
-QualifiedNameField = lambda: ObjectField('QualifiedName', [
-    ('namespaceIndex', IntField('<H')),
-    ('name', StringField()),
-  ])
-
-DataValueField = lambda: SwitchableObjectField('DataValue', [(
-    ('value', VariantField(), 0),
-    ('statusCode', IntField(), 1),
-    ('sourceTimestamp', DateTimeField(), 2),
-    ('sourcePicoseconds', IntField('<H'), 4),
-    ('serverTimestamp', DateTimeField(), 3),
-    ('serverPicoseconds', IntField('<H'), 5),
-)])
-
-class VariantField(FieldType[Any]):
-  # Based on https://reference.opcfoundation.org/Core/Part6/v104/docs/5.1.2#_Ref131507956
-  TYPE_IDS = {
-     1: BooleanField(),
-     2: IntField('<b'),
-     3: IntField('<B'),
-     4: IntField('<h'),
-     5: IntField('<H'),
-     6: IntField('<l'),
-     7: IntField('<L'),
-     8: IntField('<1'),
-     9: IntField('<Q'),
-    10: StructField('<f'),
-    11: DoubleField(),
-    12: StringField(),
-    13: DateTimeField(),
-    14: GuidField(),
-    15: ByteStringField(),
-    16: UnsupportedField('XmlElement'),
-    17: NodeIdField(),
-    18: ExpandedNodeIdField(),
-    19: IntField(),
-    20: QualifiedNameField(),
-    21: LocalizedTextField(),
-    22: ExtensionObjectField(),
-    23: DataValueField(),
-    24: UnsupportedField('nested Variant'),
-    25: UnsupportedField('DiagnosticInfo'),
-  }
-  
-  # Only implement a few common Python types for encoding.
-  ENCODE_TYPE_IDS = {
-    bool: 1,
-    int: 8,
-    str: 12,
-    bytes: 15
-  }
-  
-  default_value = None
-  
-  def to_bytes(self, value):
-    if type(value) not in VariantField.ENCODE_TYPE_IDS:
-      raise Exception(f'Variant encoding of {value} not implemented.')
-    identifier = VariantField.ENCODE_TYPE_IDS[type(value)]
-    fieldType = VariantField.TYPE_IDS[identifier]
-    return struct.pack('<B', identifier << 2) + fieldType.to_bytes(value)
-    
-  def from_bytes(self, bytestr):
-    mask, todo = bytestr[0], bytestr[1:]
-    identifier = mask >> 2
-    decodecheck(identifier in VariantField.TYPE_IDS)
-    decodecheck(mask & 0b00000010 != 0, 'Variant array dimensions not supported.')
-    
-    fieldType = VariantField.TYPE_IDS[identifier]
-    if mask & 0b00000001:
-      return ArrayField(fieldType).from_bytes(todo)
-    else:
-      return fieldType.from_bytes(todo)
-    
 
 # Extension objects. See https://reference.opcfoundation.org/Core/Part6/v104/docs/5.2.2.15
 # Call register_object to expand.
@@ -546,7 +487,7 @@ class ExtensionObjectField(FieldType[Optional[NamedTuple]]):
   @classmethod
   def register(clazz, name : str, identifier : int, bodyfields : list[tuple[str, FieldType]]) -> FieldType:
     fieldType = EncodableObjectField(name, identifier, bodyfields)
-    assert identifier not in _id2ft
+    assert identifier not in clazz._id2ft
     clazz._id2ft[identifier] = fieldType
     clazz._ty2id[fieldType.Type] = identifier
     return fieldType
@@ -582,3 +523,79 @@ class ExtensionObjectField(FieldType[Optional[NamedTuple]]):
       fieldType = ExtensionObjectField._id2ft[identifier]
       value, _ = fieldType.from_bytes(bodybytes)
       return value, todo
+      
+QualifiedNameField = lambda: ObjectField('QualifiedName', [
+    ('namespaceIndex', IntField('<H')),
+    ('name', StringField()),
+  ])  
+    
+DataValueField = lambda: SwitchableObjectField('DataValue', [
+    ('value', VariantField(), 0),
+    ('statusCode', IntField(), 1),
+    ('sourceTimestamp', DateTimeField(), 2),
+    ('sourcePicoseconds', IntField('<H'), 4),
+    ('serverTimestamp', DateTimeField(), 3),
+    ('serverPicoseconds', IntField('<H'), 5),
+])
+    
+class VariantField(FieldType[Any]):
+  # Based on https://reference.opcfoundation.org/Core/Part6/v104/docs/5.1.2#_Ref131507956
+  _TYPE_IDS = {
+     1: BooleanField(),
+     2: IntField('<b'),
+     3: IntField('<B'),
+     4: IntField('<h'),
+     5: IntField('<H'),
+     6: IntField('<l'),
+     7: IntField('<L'),
+     8: IntField('<q'),
+     9: IntField('<Q'),
+    10: DoubleField('<f'),
+    11: DoubleField(),
+    12: StringField(),
+    13: DateTimeField(),
+    14: GuidField(),
+    15: ByteStringField(),
+    16: UnsupportedField('XmlElement'),
+    17: NodeIdField(),
+    18: ExpandedNodeIdField(),
+    19: IntField(),
+    20: QualifiedNameField(),
+    21: LocalizedTextField(),
+    22: ExtensionObjectField(),
+    23: None, # DataValueField(); assigned under class definition due to mutual recursion.
+    24: UnsupportedField('nested Variant'),
+    25: UnsupportedField('DiagnosticInfo'),
+  }
+  
+  # Only implement a few common Python types for encoding.
+  _ENCODE_TYPE_IDS = {
+    bool: 1,
+    int: 8,
+    str: 12,
+    bytes: 15
+  }
+  
+  default_value = None
+  
+  def to_bytes(self, value):
+    if type(value) not in VariantField._ENCODE_TYPE_IDS:
+      raise Exception(f'Variant encoding of {value} not implemented.')
+    identifier = VariantField._ENCODE_TYPE_IDS[type(value)]
+    fieldType = VariantField._TYPE_IDS[identifier]
+    return struct.pack('<B', identifier << 2) + fieldType.to_bytes(value)
+    
+  def from_bytes(self, bytestr):
+    mask, todo = bytestr[0], bytestr[1:]
+    identifier = mask >> 2
+    decodecheck(identifier in VariantField._TYPE_IDS)
+    decodecheck(mask & 0b00000010 != 0, 'Variant array dimensions not supported.')
+    
+    fieldType = VariantField._TYPE_IDS[identifier]
+    if mask & 0b00000001:
+      return ArrayField(fieldType).from_bytes(todo)
+    else:
+      return fieldType.from_bytes(todo)
+    
+
+VariantField._TYPE_IDS[24] = DataValueField()
