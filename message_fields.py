@@ -19,6 +19,12 @@ ElementType = TypeVar('ElementType')
 class DecodeError(Exception):
   pass
   
+# Thrown when an unexpected OPC error message is encountered.
+class ServerError(Exception):
+  def __init__(self, errorcode, reason):
+    super().__init__(f'Server error {hex(errorcode)}: "{reason}"')
+    self.errorcode = errorcode
+  
 def decodecheck(condition : bool, msg : str = 'Invalid OPC message syntax'):
   if not condition:
     raise DecodeError(msg)
@@ -136,7 +142,7 @@ class FixedBytes(FieldType[NoneType]):
     return self._bytestr
     
   def from_bytes(self, bytestr):
-    decodecheck(bytestr.startswith(self._bytestr), f'Expected fixsed bytes {hexlify(self._bytestr)}; instead got {hexlify(bytestr[:len(self._bytestr)])}')
+    decodecheck(bytestr.startswith(self._bytestr), f'Expected fixed bytes {hexlify(self._bytestr)}; instead got {hexlify(bytestr[:len(self._bytestr)])}')
     return None, bytestr[len(self._bytestr):]
   
 class TransformedFieldType(Generic[ValType, OriginalValType], FieldType[ValType]):
@@ -206,7 +212,7 @@ class ArrayField(Generic[ElementType], FieldType[list[ElementType]]):
     return result, todo
 
   
-class SecurityPolicyField(TransformedFieldType[str, SecurityPolicy]):
+class SecurityPolicyField(TransformedFieldType[Optional[str], Optional[SecurityPolicy]]):
   _prefix = 'http://opcfoundation.org/UA/SecurityPolicy#'
   
   default_value = SecurityPolicy.NONE
@@ -215,11 +221,14 @@ class SecurityPolicyField(TransformedFieldType[str, SecurityPolicy]):
     super().__init__(StringField())
   
   def transform(self, original):
-    decodecheck(original.startswith(self._prefix))
-    return SecurityPolicy(original[len(self._prefix):])
+    if original is None:
+      return None
+    else:
+      decodecheck(original.startswith(self._prefix))
+      return SecurityPolicy(original[len(self._prefix):])
     
   def untransform(self, transformed):
-    return self._prefix + transformed.value
+    return self._prefix + transformed.value if transformed is not None else None
 
 class GuidField(TransformedFieldType[bytes, UUID]):
   def __init__(self):
@@ -248,7 +257,7 @@ class NodeIdField(FieldType[NodeId]):
       str :  (3, StringField()),
       UUID:  (4, GuidField()),
       bytes: (5, ByteStringField()),
-    }[type(value)]
+    }[type(value.identifier)]
     
     return bytes([enc]) + IntField('<H').to_bytes(value.namespace) + ft.to_bytes(value.identifier)
     
@@ -269,7 +278,7 @@ class NodeIdField(FieldType[NodeId]):
       }[enc]
       namespace, todo = IntField('<H').from_bytes(todo)
       identifier, todo = ft.from_bytes(todo)
-      return NodeId(namespace, identifier)
+      return NodeId(namespace, identifier), todo
       
 class ExpandedNodeIdField(FieldType[ExpandedNodeId]):
   default_value = ExpandedNodeId(NodeId(0,0), None, None)
@@ -369,8 +378,17 @@ class EncodableObjectField(ObjectField):
     return self._default
     
   def from_bytes(self, bytestr):
+    objectId = NodeIdField().from_bytes(bytestr)[0].identifier
+    if objectId == 397 and self._id != 397:
+      # Unexpected ServiceFault. Parse it into an exception.
+      _, todo = NodeIdField().from_bytes(bytestr)
+      _, todo = DateTimeField().from_bytes(todo)
+      _, todo = IntField().from_bytes(todo)
+      serviceResult, todo = IntField().from_bytes(todo)
+      raise ServerError(serviceResult, f'Unexpected ServiceFault.')
+    
+    decodecheck(objectId == self._id, 'EncodableObjectField identifier does not match expectation.')
     result, tail = super().from_bytes(bytestr)
-    decodecheck(result.typeId.identifier == self._id, 'EncodableObjectField identifier does not match expectation.')
     return result, tail
 
 class EnumField(TransformedFieldType[int, IntEnum]):
@@ -492,7 +510,7 @@ class ExtensionObjectField(FieldType[Optional[NamedTuple]]):
   
   @classmethod
   def register(clazz, name : str, identifier : int, bodyfields : list[tuple[str, FieldType]]) -> FieldType:
-    fieldType = EncodableObjectField(name, identifier, bodyfields)
+    fieldType = ObjectField(name, bodyfields)
     assert identifier not in clazz._id2ft
     clazz._id2ft[identifier] = fieldType
     clazz._ty2id[fieldType.Type] = identifier
