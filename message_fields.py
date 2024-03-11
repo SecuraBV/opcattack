@@ -19,7 +19,7 @@ ElementType = TypeVar('ElementType')
 class DecodeError(Exception):
   pass
   
-# Thrown when an unexpected OPC error message is encountered.
+# Thrown by from_bytes when an unexpected OPC error message is encountered.
 class ServerError(Exception):
   def __init__(self, errorcode, reason):
     super().__init__(f'Server error {hex(errorcode)}: "{reason}"')
@@ -386,7 +386,7 @@ class EncodableObjectField(ObjectField):
       serviceResult, todo = IntField().from_bytes(todo)
       raise ServerError(serviceResult, f'Unexpected ServiceFault.')
     
-    decodecheck(objectId == self._id, 'EncodableObjectField identifier does not match expectation.')
+    decodecheck(objectId == self._id, f'EncodableObjectField identifier incorrect. Expected: {self._id}; got: {objectId}')
     result, tail = super().from_bytes(bytestr)
     return result, tail
 

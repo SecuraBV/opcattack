@@ -148,3 +148,11 @@ def macsize(policy : SecurityPolicy) -> int:
     SecurityPolicy.BASIC256SHA256 :        32,
     SecurityPolicy.AES256_SHA256_RSAPSS :  32,
   }[policy]
+  
+# def certificate_thumbprint(cert : bytes) -> bytes:
+#   # Computes a certificate thumbprint as used in the protocol.
+#   .... # TODO
+  
+# def certificate_rsakey(cert : bytes) -> (int, int):
+#   # Extracts and parses an RSA public key from a certificate, as (m, e) integers.
+#   .... # TODO

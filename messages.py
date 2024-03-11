@@ -40,6 +40,8 @@ class OpcMessage(ABC):
     return b''.join(mtype + b'C' + chunk for chunk in bodychunks[:-1]) + mtype + b'F' + bodychunks[-1]
 
   def from_bytes(self, reader : BinaryIO):
+    # Note: when this throws a ServerError the message is still consumed in its entirety from the reader.
+    
     mtype = reader.read(3)    
     decodecheck(mtype == self.messagetype.encode() or mtype == b'ERR', 'Unexpected message type')
     

