@@ -1,6 +1,6 @@
 from message_fields import *
 
-from Crypto.PublicKey.RSA import RsaKey
+from Crypto.PublicKey.RSA import RsaKey, import_key
 from Crypto.Signature import pkcs1_15, pss
 from Crypto.Hash import SHA1, SHA256
 from Crypto.Cipher import PKCS1_v1_5, PKCS1_OAEP, AES
@@ -9,6 +9,7 @@ from Crypto.Util.Padding import pad, unpad
 from OpenSSL import crypto
 
 import hmac, hashlib
+from datetime import datetime, timedelta
 
 # Asymmetric stuff for OPN messages, authentication signatures and passwords.
 
@@ -155,8 +156,37 @@ def certificate_thumbprint(cert : bytes) -> bytes:
   # Computes a certificate thumbprint as used in the protocol.
   return hashlib.new('sha1', cert).digest()
   
-def certificate_rsakey(cert : bytes) -> tuple[int, int]:
+def certificate_publickey(cert : bytes) -> RsaKey:
+  pk = crypto.load_certificate(crypto.FILETYPE_ASN1, cert).get_pubkey()
+  return import_key(crypto.dump_publickey(crypto. FILETYPE_ASN1, pk))
+
+def certificate_publickey_numbers(cert : bytes) -> tuple[int, int]:
   # Extracts and parses an RSA public key from a certificate, as (m, e) integers.
   numbers = crypto.load_certificate(crypto.FILETYPE_ASN1, cert).get_pubkey().to_cryptography_key().public_numbers()
   return numbers.n, numbers.e
 
+def selfsign_cert(template : bytes, cn : str, expiry : datetime) -> tuple[bytes, RsaKey]:
+  # Generates a self-signed copy of template (DER encoded) with a given CN and validity. 
+  # Returns it with (fresh) associated private key.
+  key = crypto.PKey()
+  key.generate_key(crypto.TYPE_RSA, 2048)
+  
+  # Build self-signed cert.
+  cert = crypto.load_certificate(crypto.FILETYPE_ASN1, template)
+  cert.set_pubkey(key)
+  subject = cert.get_subject()
+  subject.commonName = cn
+  cert.set_subject(subject)
+  
+  # Set validity from three days ago until expiry.
+  cert.set_issuer(subject)
+  asn1format = '%Y%m%d%H%M%SZ'
+  cert.set_notBefore((datetime.now() - timedelta(days=3)).strftime(asn1format))
+  cert.set_notAfter(expiry.strftime(asn1format))
+  
+  # Sign with the private key.
+  cert.sign(key, 'sha256')
+  
+  # Convert key to pycryptodrome object.
+  keybytes = crypto.dump_privatekey(crypto. FILETYPE_ASN1, key)
+  return crypto.dump_certificate(crypto.FILETYPE_ASN1, cert), import_key(keybytes)

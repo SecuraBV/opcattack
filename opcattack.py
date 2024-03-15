@@ -186,6 +186,23 @@ certificate, to check whether an authentication bypass payload has worked.
   def execute(self, args):
     raise Exception('TODO: implement')
     
+class NoAuthAttack(Attack):
+  subcommand = 'auth-check'
+  short_help = 'tests if server allows unauthenticated access'
+  long_help = """
+This is not a new attack. Just a simple check to see whether a server allows anonymous access without authentication;
+either via the None policy or by automatically accepting untrusted certificates. 
+
+This is an easy misconfiguration to make (or insecure default to forget about), so it's good to check for this. Also,
+there's not much use for an authentication bypass if no authentication is enforced at all.
+"""
+
+  def add_arguments(self, aparser):
+    pass
+    
+  def execute(self, args):
+    raise Exception('TODO: implement')
+    
 class DecryptAttack(Attack):
   subcommand = 'decrypt'
   short_help = 'sniffed password and/or traffic decryption via an padding oracle'
@@ -228,8 +245,11 @@ class SigForgeAttack(Attack):
   short_help = 'signature forgery via padding oracle'
   long_help = """
 Uses the same padding oracle attack as 'decrypt', but instead of decrypting a
-ciphertext an RSA signature is forged with the private key that a server is 
-using.
+ciphertext an RSA PKCS#1 signature is forged with the private key that a server 
+is using.
+
+The technique can also be used to forge PSS signatures, but that's 
+currently not implemented.
 
 Is used automatically as part of reflect/relay attacks (with --bypass-opn). 
 This command can be used to sign any other arbitrary payload. Can be used
@@ -237,7 +257,7 @@ to show the concept in isolation or perform some follow-up attack.
 """.strip()
   
   def add_arguments(self, aparser):
-    aparser.add_argument('-t', '--padding-oracle-type', choices=('opn', 'password', 'try-both'),
+    aparser.add_argument('-t', '--padding-oracle-type', choices=('opn', 'password', 'try-both'), default='try-both',
       help='which PKCS#1 padding oracle to use; default: try-both')
     aparser.add_argument('payload', type=str, required=True,
       help='hex-encoded payload to spoof a signature on')
@@ -245,7 +265,12 @@ to show the concept in isolation or perform some follow-up attack.
       help='endpoint URL of the OPC UA server whose private key to spoof a signature with')
     
   def execute(self, args):
-    raise Exception('TODO: implement')
+    opn, password = {
+      'opn'     : (True,  False),
+      'password': (False, True),
+      'try-both': (True,  True),
+    }[args.padding_oracle_type]
+    forge_signature_attack(args.server_url, unhexlify(args.payload), opn, password)
 
 class MitMAttack(Attack):
   subcommand = 'mitm'
@@ -260,24 +285,15 @@ TODO
   def execute(self, args):
     raise Exception('TODO: implement')
 
-class NoAuthAttack(Attack):
-  subcommand = 'auth-check'
-  short_help = 'tests if server allows unauthenticated access'
-  long_help = """
-This is not a new attack. Just a simple check to see whether a server allows anonymous access without authentication;
-eiter via the None policy or by automatically accepting untrusted certificates. 
-
-This is an easy misconfiguration to make (or insecure default to forget about), so it's good to check for this. Also,
-there's not much use for an authentication bypass if no authentication is enforced at all.
-"""
-
-  def add_arguments(self, aparser):
-    pass
-    
-  def execute(self, args):
-    raise Exception('TODO: implement')
-
-ENABLED_ATTACKS = [ReflectAttack(), RelayAttack()]
+ENABLED_ATTACKS = [
+  ReflectAttack(), 
+  RelayAttack(), 
+  PathInjectAttack(), 
+  NoAuthAttack(),
+  DecryptAttack(),
+  SigForgeAttack(), 
+  MitMAttack(),
+]
 
 
 def main():
