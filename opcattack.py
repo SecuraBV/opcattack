@@ -129,10 +129,6 @@ information.
 """.strip()
   
   def add_arguments(self, aparser):
-    aparser.add_argument('-o', '--forged-opn', type=FileType('r'),
-      help='result of a prior opnforge attack against either server')
-    aparser.add_argument('-b', '--forged-opn-b', type=FileType('r'),
-      help='in case separate forged OPN\'s need to be used for both servers, this one is used for server-b and the -o file is used for server-a')
     aparser.add_argument('-n', '--no-demo', action='store_true',
       help='don\'t dump server contents on success; just tell if attack worked')
     aparser.add_argument('-b', '--bypass-opn', action='store_true',
@@ -181,6 +177,8 @@ certificate, to check whether an authentication bypass payload has worked.
       help='log in a second time with the same certificate; useful for testing the default payload auth bypass')
     aparser.add_argument('-n', '--no-demo', action='store_true',
       help='don\'t dump server contents when an authentication bypass worked')
+    aparser.add_argument('url', type=str,
+      help='Target server OPC URL (either opc.tcp:// or https:// protocol)')
     
     
   def execute(self, args):
@@ -231,10 +229,10 @@ to grab a password payload.
   def add_arguments(self, aparser):
     aparser.add_argument('-t', '--padding-oracle-type', choices=('opn', 'password', 'try-both'),
       help='which PKCS#1 padding oracle to use; default: try-both')
-    aparser.add_argument('ciphertext', type=str, required=True,
-      help='hex-encoded RSA-encrypted ciphertext; either OAEP or PKCS#1')
-    aparser.add_argument('server-url', type=str, required=True,
+    aparser.add_argument('server-url', type=str,
       help='endpoint URL of the OPC UA server owning the RSA key pair the ciphertext was produced for')
+    aparser.add_argument('ciphertext', type=str,
+      help='hex-encoded RSA-encrypted ciphertext; either OAEP or PKCS#1')
     
   def execute(self, args):
     raise Exception('TODO: implement')
@@ -259,10 +257,10 @@ to show the concept in isolation or perform some follow-up attack.
   def add_arguments(self, aparser):
     aparser.add_argument('-t', '--padding-oracle-type', choices=('opn', 'password', 'try-both'), default='try-both',
       help='which PKCS#1 padding oracle to use; default: try-both')
-    aparser.add_argument('payload', type=str, required=True,
-      help='hex-encoded payload to spoof a signature on')
-    aparser.add_argument('server-url', type=str, required=True,
+    aparser.add_argument('server-url', type=str,
       help='endpoint URL of the OPC UA server whose private key to spoof a signature with')
+    aparser.add_argument('payload', type=str, 
+      help='hex-encoded payload to spoof a signature on')
     
   def execute(self, args):
     opn, password = {
