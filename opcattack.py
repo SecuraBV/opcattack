@@ -264,7 +264,7 @@ to show the concept in isolation or perform some follow-up attack.
       help='which PKCS#1 padding oracle to use; default: try-both')
     aparser.add_argument('-H', '--hash-function', choices=('sha1', 'sha256'), default='sha256',
       help='hash function to use in signature computation; default: sha256')
-    aparser.add_argument('server-url', type=str,
+    aparser.add_argument('url', type=str,
       help='endpoint URL of the OPC UA server whose private key to spoof a signature with')
     aparser.add_argument('payload', type=str, 
       help='hex-encoded payload to spoof a signature on')
@@ -275,7 +275,7 @@ to show the concept in isolation or perform some follow-up attack.
       'password': (False, True),
       'try-both': (True,  True),
     }[args.padding_oracle_type]
-    forge_signature_attack(args.server_url, unhexlify(args.payload), opn, password, args.hash_function)
+    forge_signature_attack(args.url, unhexlify(args.payload), opn, password, args.hash_function)
 
 class MitMAttack(Attack):
   subcommand = 'mitm'

