@@ -60,6 +60,7 @@ def parse_endpoint_url(url):
     protos = {
       "opc.tcp": TransportProtocol.TCP_BINARY,
       "https"  : TransportProtocol.HTTPS,
+      "opc.https"  : TransportProtocol.HTTPS,
     }
     if m.group('scheme') not in protos:
       raise Exception(f'Unsupported protocol: "{m.group("scheme")}" in URL {url}.')
@@ -264,7 +265,7 @@ def generic_exchange(
     if type(chan_or_url) == ChannelState:
       return session_exchange(chan_or_url, reqfield, respfield, **req_data)
     else:
-      assert type(chan_or_url) == str and chan_or_url.startswith('https://')
+      assert type(chan_or_url) == str and parse_endpoint_url(chan_or_url)[0] == TransportProtocol.HTTPS
       return https_exchange(chan_or_url, nonce_policy, reqfield, respfield, **req_data)
 
 # Request endpoint information from a server.
@@ -280,7 +281,7 @@ def get_endpoints(ep_url : str) -> List[endpointDescription.Type]:
         profileUris=[],
       )
   else:
-    assert(ep_url.startswith('https://'))
+    assert(parse_endpoint_url(ep_url)[0] == TransportProtocol.HTTPS)
     resp = https_exchange(f'{ep_url.rstrip("/")}/discovery', None, getEndpointsRequest, getEndpointsResponse, 
         requestHeader=simple_requestheader(),
         endpointUrl=ep_url,
@@ -463,7 +464,7 @@ def reflect_attack(url : str, demo : bool, try_opn_oracle : bool, try_password_o
       raise AttackNotPossible('No endpoints applicable (TCP/HTTPS transport and a non-None security policy are required; also, support for Aes256_Sha256_RsaPss is currently not implemented yet).')
     
   else:
-    raise AttackNotPossible('Server does not support HTTPS endpoint. Try with --bypass-opn instead.')
+    raise AttackNotPossible('Server does not support HTTPS endpoint (with non-None security policy). Try with --bypass-opn instead.')
       
 def relay_attack(source_url : str, target_url : str, demo : bool):
   log(f'Attempting relay from {source_url} to {target_url}')
