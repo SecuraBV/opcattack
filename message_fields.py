@@ -186,12 +186,11 @@ class DateTimeField(TransformedFieldType[int, Optional[datetime]]):
   def __init__(self):
     super().__init__(IntField('<Q'))
   
-  # TODO: fix bug
   def transform(self, original):
-    return datetime(1, 1, 1) + timedelta(milliseconds=original // 10000) if original != 0 else None
+    return datetime(1601, 1, 1) + timedelta(milliseconds=original // 10000) if original != 0 else None
     
   def untransform(self, transformed):
-    return round((transformed - datetime(1, 1, 1)).total_seconds() * 10000000) if transformed is not None else 0
+    return round((transformed - datetime(1601, 1, 1)).total_seconds() * 10000000) if transformed is not None else 0
 
 class ArrayField(Generic[ElementType], FieldType[list[ElementType]]):
   _lenfield = IntField()
