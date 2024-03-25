@@ -23,6 +23,8 @@ class OpcMessage(ABC):
     ...
     
   def to_bytes(self, chunksize : int = -1) -> bytes:
+    if chunksize >= 0:
+      raise Exception('TODO: fix chunking implementation')
     mtype = self.messagetype.encode()
     assert len(mtype) == 3
     
@@ -48,11 +50,8 @@ class OpcMessage(ABC):
     body = b''
     ctype = reader.read(1)
     
-    while ctype == b'C':
-      chunklen = struct.unpack('<I', reader.read(4))[0] - 8
-      body += reader.read(chunklen)
-      decodecheck(reader.read(3) == mtype, 'Changing message type after chunk')
-      ctype = reader.read(1)  
+    if ctype == b'C':
+      raise Exception('TODO: chunked server response; currently not implemented.')
     
     decodecheck(ctype == b'F')
     finallen = struct.unpack('<I', reader.read(4))[0] - 8

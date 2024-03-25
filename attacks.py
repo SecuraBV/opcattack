@@ -88,7 +88,7 @@ def connect_and_hello(host : str, port : int) -> socket:
     version=0,
     receiveBufferSize=2**16,
     sendBufferSize=2**16,
-    maxMessageSize=2097152, #2**24,
+    maxMessageSize=2**24,
     maxChunkCount=2**8,
     endpointUrl=f'opc.tcp://{host}:{port}/',
   ), AckMessage())
@@ -410,9 +410,7 @@ def demonstrate_access(chan : ChannelState | str, authToken : NodeId, policy : S
           except UnsupportedFieldException as ex:
             log_success(tree_prefix + f'- {ref.displayName.text}: <{ex.fieldname}>')
           except DecodeError as ex:
-            log_success(tree_prefix + f'- {ref.displayName.text}: <decode error>')
-          except Exception as ex:
-            log_success(tree_prefix + f'- {ref.displayName.text}: <{type(ex)}>')
+            log_success(tree_prefix + f'- {ref.displayName.text}: <decode error> ("{ex}")')
         else:
           log_success(tree_prefix + f'- {ref.displayName.text} ({ref.nodeClass.name})')
           
