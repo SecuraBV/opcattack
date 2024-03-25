@@ -22,9 +22,7 @@ class OpcMessage(ABC):
   def fields() -> list[tuple[str, FieldType]]:
     ...
     
-  def to_bytes(self, chunksize : int = -1) -> bytes:
-    if chunksize >= 0:
-      raise Exception('TODO: fix chunking implementation')
+  def to_bytes(self) -> bytes:
     mtype = self.messagetype.encode()
     assert len(mtype) == 3
     
@@ -33,29 +31,22 @@ class OpcMessage(ABC):
       value = getattr(self, name)
       body += ftype.to_bytes(value)
     
-    if chunksize <= 0:
-      bodychunks = [body]
-    else:
-      bodychunks = [body[i:i+chunksize] for i in range(0, len(body), chunksize)]
-    
-    bodychunks = [struct.pack('<I', len(chunk) + 8) + chunk for chunk in bodychunks]
-    return b''.join(mtype + b'C' + chunk for chunk in bodychunks[:-1]) + mtype + b'F' + bodychunks[-1]
+    return mtype + b'F' + struct.pack('<I', len(body) + 8) + body
 
-  def from_bytes(self, reader : BinaryIO):
+  def from_bytes(self, reader : BinaryIO, allow_chunking : bool = False) -> bool:
     # Note: when this throws a ServerError the message is still consumed in its entirety from the reader.
+    # Returns whether this is the final chunk.
     
     mtype = reader.read(3)
     decodecheck(mtype == self.messagetype.encode() or mtype == b'ERR', 'Unexpected message type')
     
-    body = b''
     ctype = reader.read(1)
     
-    if ctype == b'C':
-      raise Exception('TODO: chunked server response; currently not implemented.')
+    decodecheck(ctype == b'F' or ctype == b'C')
+    decodecheck(ctype == b'F' or allow_chunking, f'Unexpected chunked message.')
     
-    decodecheck(ctype == b'F')
-    finallen = struct.unpack('<I', reader.read(4))[0] - 8
-    body += reader.read(finallen)
+    bodylen = struct.unpack('<I', reader.read(4))[0] - 8
+    body = reader.read(bodylen)
     
     if mtype == b'ERR' and self.messagetype != 'ERR':
       # Server error. Parse for exception.
@@ -66,6 +57,8 @@ class OpcMessage(ABC):
     for name, ftype in self.fields:
       value, body = ftype.from_bytes(body)
       setattr(self, name, value)
+    
+    return ctype == b'F'
 
   def get_field_location(self, fieldname : str) -> int:
     '''Returns binary (offset, length) of a specific field within the result of self.to_bytes()'''
