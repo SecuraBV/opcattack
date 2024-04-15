@@ -606,8 +606,8 @@ class PaddingOracle(ABC):
     return self._attempt_query(ciphertext)
     
 # For some reason, one implementation leaves the TCP connection open after failure but stops responding. Put a
-# timeout on the socket (kinda arbitrarily picked 3 seconds) to cause a breaking exception when this happens.
-PO_SOCKET_TIMEOUT = 3
+# timeout on the socket (kinda arbitrarily picked 10 seconds) to cause a breaking exception when this happens.
+PO_SOCKET_TIMEOUT = 10
     
 class OPNPaddingOracle(PaddingOracle):
   def _setup(self):
