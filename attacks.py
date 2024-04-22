@@ -1025,7 +1025,10 @@ def find_padding_oracle(url : str, try_opn : bool, try_password : bool, timing_t
           quality = padding_oracle_quality(endpoint.serverCertificate, oracle)
           log(f'{oname} padding oracle score: {quality}/100')
         except ServerError as err:
-          log(f'Got server error {hex(err.errorcode)} ("{err.reason}"). Don\'t know how to interpret it. Skipping {oname} oracle.')
+          if err.errorcode == 0x80550000 and endpoint.securityPolicyUri != SecurityPolicy.BASIC128RSA15:
+            log(f'Got error 0x80550000 (BadSecurityPolicyRejected). Implies {oname} downgrade to Basic128Rsa15 not accepted.')
+          else:
+            log(f'Got server error {hex(err.errorcode)} ("{err.reason}"). Don\'t know how to interpret it. Skipping {oname} oracle.')
           quality = 0
         except Exception as ex:
           log(f'Exception {type(ex).__name__} raised ("{ex}"). Skipping {oname} oracle.')
