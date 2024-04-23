@@ -5,6 +5,10 @@ import struct
 from typing import *
 from dataclasses import dataclass
 
+# Exception signifying rgar a CloseSecureChannelRequest was received when expecting something else.
+class ClientClosedChannel(Exception):
+  pass
+
 # Main "outer" messages.
 
 class OpcMessage(ABC):
@@ -22,8 +26,9 @@ class OpcMessage(ABC):
   def fields() -> list[tuple[str, FieldType]]:
     ...
     
-  def to_bytes(self) -> bytes:
+  def to_bytes(self, final_chunk : bool = True) -> bytes:
     mtype = self.messagetype.encode()
+    chunkmarker = b'F' if final_chunk else b'C'
     assert len(mtype) == 3
     
     body = b''
@@ -31,7 +36,7 @@ class OpcMessage(ABC):
       value = getattr(self, name)
       body += ftype.to_bytes(value)
     
-    return mtype + b'F' + struct.pack('<I', len(body) + 8) + body
+    return mtype + chunkmarker + struct.pack('<I', len(body) + 8) + body
 
   def from_bytes(self, reader : BinaryIO, allow_chunking : bool = False) -> bool:
     # Note: when this throws a ServerError the message is still consumed in its entirety from the reader.
@@ -39,7 +44,7 @@ class OpcMessage(ABC):
     
     mtype = reader.read(3)
     decodecheck(len(mtype) == 3, 'Connection unexpectedly terminated.')
-    decodecheck(mtype == self.messagetype.encode() or mtype == b'ERR', 'Unexpected message type')
+    decodecheck(mtype == self.messagetype.encode() or mtype in [b'ERR',b'CLO'], 'Unexpected message type')
     
     ctype = reader.read(1)
     
@@ -50,10 +55,15 @@ class OpcMessage(ABC):
     body = reader.read(bodylen)
     
     if mtype == b'ERR' and self.messagetype != 'ERR':
-      # Server error. Parse for exception.
+      # Unexpected server error. Parse for exception.
       errorcode, tail = IntField().from_bytes(body)
       reason, _ = StringField().from_bytes(tail)
       raise ServerError(errorcode, reason)
+      
+    if mtype == b'CLO' and self.messagetype != 'CLO':
+      # Unexpected client channel closure.
+      raise ClientClosedChannel()
+      
     
     for name, ftype in self.fields:
       value, body = ftype.from_bytes(body)

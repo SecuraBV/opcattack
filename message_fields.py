@@ -360,9 +360,14 @@ class ObjectField(FieldType[NamedTuple]):
       data[fname] = bodyval
     return self._Body(**data), todo
     
+  # Expose type name and field info.
   @property
   def Type(self):
     return self._Body
+    
+  @property
+  def fields(self):
+    return self._bodyfields
 
 class EncodableObjectField(ObjectField):
   def __init__(self, name : str, identifier : int, bodyfields : list[tuple[str, FieldType]]):
@@ -390,6 +395,9 @@ class EncodableObjectField(ObjectField):
     decodecheck(objectId == self._id, f'EncodableObjectField identifier incorrect. Expected: {self._id}; got: {objectId}')
     result, tail = super().from_bytes(bytestr)
     return result, tail
+    
+  def check_type(self, bytestr) -> bool:
+    return NodeIdField().from_bytes(bytestr)[0].identifier == self._id
 
 class EnumField(TransformedFieldType[int, IntEnum]):
   def __init__(self, EnumType : Type[IntEnum]):
