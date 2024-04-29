@@ -361,7 +361,7 @@ to allow the right transformation via byterange dropping.
     add_mitm_args(aparser)
     
   def execute(self, args):
-    client_attack(chunkdrop_mitm, args.server_url, *args.laddress, args.reverse_hello, args.persist)
+    client_attack(chunkdrop_mitm, getattr(args, 'server-url'), *getattr(args,'[listen-address]:port'), args.reverse_hello, args.persist)
 
 ENABLED_ATTACKS = [
   CheckAttack(),
