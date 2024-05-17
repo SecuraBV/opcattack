@@ -97,7 +97,10 @@ class OpcMessage(ABC):
     
     # Length calculations.
     padbyte = plainblocksize - (len(plaintext) + 1 + sigsize) % plainblocksize
-    padding = (padbyte + 1) * bytes([padbyte])
+    if padbyte < 256:
+      padding = (padbyte + 1) * bytes([padbyte])
+    else:
+      padding = (padbyte + 1) * bytes([padbyte % 256]) + bytes([padbyte // 256])
     ptextsize = len(plaintext) + len(padding) + sigsize
     ctextsize = (ptextsize // plainblocksize) * cipherblocksize
     
