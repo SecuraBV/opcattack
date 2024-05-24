@@ -982,7 +982,8 @@ def padding_oracle_quality(
   # Perform the test.
   score = 0
   for i, (padding_right, plaintext) in enumerate(testcases):
-    progbar = '=' * (i // 2) + ' ' * (100 - i // 2)
+    progress = i * 200 // (goodpads + badpads)
+    progbar = '=' * (progress // 2) + ' ' * (100 - progress // 2)
     print(f'[*] Progress: [{progbar}]', file=sys.stderr, end='\r', flush=True)
     if oracle.query(int2bytes(pow(plaintext, e, n), keylen)):
       if padding_right:
