@@ -338,30 +338,31 @@ material such as tokens or signed nonces.
     
   def execute(self, args):
     client_attack(nonegrade_mitm, getattr(args, 'server-url'), *getattr(args,'[listen-address]:port'), args.reverse_hello, args.persist)
-    
-class ByteDropMitmAttack(Attack):
-  subcommand = 'client-bytedrop'
-  short_help = 'password stealing downgrade attack against a client, using the "byte dropping" attack'
-  long_help = """
-Demonstrates the byte dropping MitM attack by modifying a signed server endpoint list such that is appears to request
-the client to supply an unencrypted password. 
-
-Takes advantage of the fact that HelloMessage parameters are unauthenticated to force the server to send signed 
-messages with a payload length of one byte. By dropping messages arbitrary byte ranges (except for the final byte) can 
-be removed from the payload.
-
-The effect is this particular attack is the same as client-downgrade, except that the client does not need to accept 
-the None security policy for connection security.
-
-Requires that the server has an endpoint list that includes a Sign endpoint, and happens to have the right structure
-to allow the right transformation via byterange dropping.
-""".strip()
   
-  def add_arguments(self, aparser):
-    add_mitm_args(aparser)
+# Byte drop attack does not actually appear to work in practice  
+# class ByteDropMitmAttack(Attack):
+#   subcommand = 'client-bytedrop'
+#   short_help = 'password stealing downgrade attack against a client, using the "byte dropping" attack'
+#   long_help = """
+# Demonstrates the byte dropping MitM attack by modifying a signed server endpoint list such that is appears to request
+# the client to supply an unencrypted password. 
+
+# Takes advantage of the fact that HelloMessage parameters are unauthenticated to force the server to send signed 
+# messages with a payload length of one byte. By dropping messages arbitrary byte ranges (except for the final byte) can 
+# be removed from the payload.
+
+# The effect is this particular attack is the same as client-downgrade, except that the client does not need to accept 
+# the None security policy for connection security.
+
+# Requires that the server has an endpoint list that includes a Sign endpoint, and happens to have the right structure
+# to allow the right transformation via byterange dropping.
+# """.strip()
+  
+#   def add_arguments(self, aparser):
+#     add_mitm_args(aparser)
     
-  def execute(self, args):
-    client_attack(chunkdrop_mitm, getattr(args, 'server-url'), *getattr(args,'[listen-address]:port'), args.reverse_hello, args.persist)
+#   def execute(self, args):
+#     client_attack(chunkdrop_mitm, getattr(args, 'server-url'), *getattr(args,'[listen-address]:port'), args.reverse_hello, args.persist)
 
 ENABLED_ATTACKS = [
   CheckAttack(),
@@ -372,7 +373,7 @@ ENABLED_ATTACKS = [
   DecryptAttack(),
   SigForgeAttack(), 
   DowngradeMitmAttack(),
-  ByteDropMitmAttack(),
+  # ByteDropMitmAttack(),
 ]
 
 
