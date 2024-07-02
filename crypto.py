@@ -200,6 +200,20 @@ def selfsign_cert(template : bytes, cn : str, expiry : datetime) -> tuple[bytes,
   # Convert key to pycryptodrome object.
   keybytes = crypto.dump_privatekey(crypto. FILETYPE_ASN1, key)
   return crypto.dump_certificate(crypto.FILETYPE_ASN1, cert), import_key(keybytes)
+  
+def applicationuri_from_cert(certificate : bytes) -> str:
+  # Reads the first SAN (or otherwise Common Name) from a certificate, which is to be used as an applicationUri.
+  cert = crypto.load_certificate(crypto.FILETYPE_ASN1, certificate)
+  for i in range(0, cert.get_extension_count()):
+    ext = cert.get_extension(i)
+    if b'subjectAltName' in ext.get_short_name():
+      name = str(ext).split(',')[0]
+      if name.startswith('URI:'):
+        name = name[4:]
+      return name
+  
+  return cert.get_subject().commonName
+  
 
 def int2bytes(value : int, outlen : int) -> bytes:
   # Coverts a nonnegative integer to a fixed-size big-endian binary representation.

