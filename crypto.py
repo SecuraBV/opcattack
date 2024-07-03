@@ -130,7 +130,9 @@ def pkcs7_pad(message : bytes, blocksize : int) -> bytes:
   return pad(message, blocksize)
   
 def pkcs7_unpad(message : bytes, blocksize : int) -> bytes:
-  return unpad(message, blocksize)
+  # return unpad(message, blocksize)
+  # Alternative implementation that accepts non-aligned block sizes.
+  return message[:-message[-1]]
 
 def aes_cbc_encrypt(key : bytes, iv : bytes, padded_plaintext : bytes) -> bytes:
   return AES.new(key, AES.MODE_CBC, iv=iv).encrypt(padded_plaintext)
