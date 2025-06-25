@@ -1,6 +1,6 @@
 # OPC UA attack tool
 
-Python tool to automate the OPC UA attacks described in \[eventually put a URL to some public write-up here\], and to 
+Python tool to automate the OPC UA attacks described in my talk "[No VPN Needed? Cryptographic Attacks Against the OPC UA Protocol](https://www.blackhat.com/us-25/briefings/schedule/index.html#no-vpn-needed-cryptographic-attacks-against-the-opc-ua-protocol-44760)", and to 
 evaluate whether an OPC UA endpoint is potentially vulnerable.
 
 ## Usage
@@ -182,6 +182,6 @@ again and the first half will be automatically skipped.
 The tool implements two other experimental attacks, but these are not novel protocol flaws:
 
 - `cn-inject`: attempts a path injection attack via the CN of an untrusted certificate. While in theory this would be possible against a naive implementation of the OPC UA [certificate file name conventions](https://reference.opcfoundation.org/GDS/v105/docs/F) I have not actually found an implementation (yet) that is vulnerable to this.
-- `client-downgrade`: MitM attack to downgrade encryption of a client connection, attempting to steal the user password. This is already basically a known potential flaw, however, and most implementations I found are not affected because they need the user to specify a specific security policy in the client configuration.
+- `client-downgrade`: MitM attack to downgrade encryption of a client connection, attempting to steal the user password. This is already pretty much a known potential flaw, however, and most implementations I found are not affected because they need the user to specify a specific security policy in the client configuration.
 
 
