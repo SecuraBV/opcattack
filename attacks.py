@@ -80,6 +80,16 @@ def opc_exchange(sock : socket, request : OpcMessage, response_obj : Optional[Op
     response.from_bytes(sockio)
     return response
     
+# Variant that supports response chunking. Yields each chunk as a separate response object.
+def chunkable_opc_exchange(sock : socket, request : OpcMessage, response_obj : Optional[OpcMessage] = None) -> Iterator[OpcMessage]:
+  with sock.makefile('rwb') as sockio:
+    sockio.write(request.to_bytes())
+    sockio.flush()
+    done = False
+    while not done:
+      response = response_obj or request.__class__()
+      done = response.from_bytes(sockio, allow_chunking=True)
+      yield response    
 
 # Sets up a binary TCP connection, does a plain hello and simply ignores the server's size and chunking wishes.
 def connect_and_hello(host : str, port : int) -> socket:
@@ -227,18 +237,28 @@ def session_exchange(channel : ChannelState,
     msg.sign(lambda data: sha_hmac(crypto.policy, crypto.clientKeys.signingKey, data), macsize(crypto.policy))
     
   # Do the exchange.
-  reply = opc_exchange(channel.sock, msg)
+  chunks = [reply.encodedPart for reply in chunkable_opc_exchange(channel.sock, msg)]
   
-  decodedPart = reply.encodedPart
-  if channel.securityMode == MessageSecurityMode.SIGN_AND_ENCRYPT:
-    # Decrypt.
-    decodedPart = aes_cbc_decrypt(crypto.serverKeys.encryptionKey, crypto.serverKeys.iv, decodedPart)
+  # Decrypt/unsign if needed.
+  decoded = b''
+  for chunk in chunks:
+    if channel.securityMode == MessageSecurityMode.SIGN_AND_ENCRYPT:
+      # Decrypt and unpad, while simply ignoring MAC.
+      decrypted = aes_cbc_decrypt(crypto.serverKeys.encryptionKey, crypto.serverKeys.iv, chunk)
+      unsigned = decrypted[:-macsize(crypto.policy)]
+      decoded += pkcs7_unpad(unsigned, 16)[:-1] if not unsigned.endswith(b'\x00') else unsigned[:-1]
+    elif channel.securityMode == MessageSecurityMode.SIGN:
+      # Just strip MAC.
+      decoded += chunk[:-macsize(crypto.policy)]
+    else:
+      assert(channel.securityMode == MessageSecurityMode.NONE)
+      decoded += chunk
 
   # Increment the message counter.
   channel.msg_counter += 1
     
-  # Parse the response, ignoring any padding and MAC.
-  convo, _ = encodedConversation.from_bytes(decodedPart)
+  # Parse the response.
+  convo, _ = encodedConversation.from_bytes(decoded)
   resp, _ = respfield.from_bytes(convo.requestOrResponse)
   return resp
   
@@ -411,6 +431,8 @@ def demonstrate_access(chan : ChannelState | str, authToken : NodeId, policy : S
             log_success(tree_prefix + f'- {ref.displayName.text}: <{ex.fieldname}>')
           except DecodeError as ex:
             log_success(tree_prefix + f'- {ref.displayName.text}: <decode error> ("{ex}")')
+          except Exception as ex:
+            log_success(tree_prefix + f'- {ref.displayName.text}: <<{ex}>> ("{ex}")')
         else:
           log_success(tree_prefix + f'- {ref.displayName.text} ({ref.nodeClass.name})')
           
@@ -1401,8 +1423,8 @@ def server_checker(url : str, test_timing_attack : bool):
       for expandval, result in results.items():
         log_success(f'Expansion parameter {expandval}:')
         log_success(f'Average time with correct padding: {result["avgok"]}')
-        log_success(f'Shortest time with correct padding: {result["minok"]}')
         log_success(f'Average time with incorrect padding: {result["avgnok"]}')
+        log_success(f'Shortest time with correct padding: {result["minok"]}')
         log_success(f'Longest time with incorrect padding: {result["maxnok"]}')
         log_success('-----------------')
 
