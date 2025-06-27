@@ -3,6 +3,7 @@ from message_fields import *
 from abc import ABC
 import struct
 from typing import *
+from dataclasses import dataclass
 
 # Main "outer" messages.
 
@@ -179,7 +180,7 @@ requestHeader = ObjectField('RequestHeader', [
     ('returnDiagnostics', IntField()),
     ('auditEntryId', StringField()),
     ('timeoutHint', IntField()),
-    ('additionalHeader', ExtensionObjectField(0, TrailingBytes())),
+    ('additionalHeader', ExtensionObjectField()),
   ])
 
 responseHeader = ObjectField('ResponseHeader', [
@@ -188,7 +189,7 @@ responseHeader = ObjectField('ResponseHeader', [
     ('serviceResult', IntField()),
     ('serviceDiagnostics', FixedBytes(b'\x00')), # Just assume this stays empty for now. 
     ('stringTable', ArrayField(StringField())),
-    ('additionalHeader', ExtensionObjectField(0, TrailingBytes())),
+    ('additionalHeader', ExtensionObjectField()),
   ])
 
 applicationDescription = ObjectField('ApplicationDescription', [
@@ -276,8 +277,8 @@ activateSessionRequest = EncodableObjectField('ActivateSessionRequest', 467, [
     ('requestHeader', requestHeader),
     ('clientSignature', signatureData),
     ('clientSoftwareCertificates', ArrayField(signedSoftwareCertificate)),
-    ('localeIds', ArrayField(StringField()))
-    ('userIdentityToken', ExtensionObjectField(0, TrailingBytes())),
+    ('localeIds', ArrayField(StringField())),
+    ('userIdentityToken', ExtensionObjectField()),
     ('userTokenSignature', signatureData),
   ])
 

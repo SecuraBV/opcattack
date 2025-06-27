@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 from attacks import *
 
 from argparse import ArgumentParser, FileType, RawDescriptionHelpFormatter, Namespace
@@ -34,7 +36,7 @@ class Attack(ABC):
     ...
     
   @abstractmethod
-  def add_arguments(aparser : ArgumentParser):
+  def add_arguments(self, aparser : ArgumentParser):
     """Add attack-specific options."""
     ...
     
@@ -74,16 +76,16 @@ you can supply your own certificate and private key (e.g. signed via the
 WebPKI or taken from a compromised system) via --opn-cert and --opn-key.
 """.strip()
   
-  def add_arguments(aparser):
-    aparser.add_arguments('-o', '--forged-opn', 
-      help_text='result of a prior opnforge attack against the server')
-    aparser.add_arguments('-c', '--opn-cert', 
-      help_text='alternative certificate to use for the OPN handshake')
-    aparser.add_arguments('-k', '--opn-key', 
-      help_text='private key associated with --opn-cert certificate')
+  def add_arguments(self, aparser):
+    aparser.add_argument('-o', '--forged-opn', type=FileType('r'),
+      help='result of a prior opnforge attack against the server')
+    aparser.add_argument('-c', '--opn-cert', type=FileType('r'),
+      help='alternative certificate (PEM encoded) to use for the OPN handshake')
+    aparser.add_argument('-k', '--opn-key', type=FileType('r'),
+      help='private key (PEM encoded) associated with --opn-cert certificate')
     
-    aparser.add_arguments('address', metavar='host:port',
-      help_text='Target server address', 
+    aparser.add_argument('address', metavar='host:port',
+      help='Target server address', 
       type=address_arg)
     
   def execute(self, args):
@@ -107,21 +109,21 @@ Just like with the reflection attack. It is also possible to supply an
 alternative certificate for OPN.
 """.strip()
   
-  def add_arguments(aparser):
-    aparser.add_arguments('-a', '--forged-opn-a', 
-      help_text='result of a prior opnforge attack against server-a')
-    aparser.add_arguments('-b', '--forged-opn-b', 
-      help_text='result of a prior opnforge attack against server-b')
-    aparser.add_arguments('-c', '--opn-cert', 
-      help_text='alternative certificate to use for the OPN handshake')
-    aparser.add_arguments('-k', '--opn-key', 
-      help_text='private key associated with --opn-cert certificate')
+  def add_arguments(self, aparser):
+    aparser.add_argument('-o', '--forged-opn', type=FileType('r'),
+      help='result of a prior opnforge attack against either server')
+    aparser.add_argument('-b', '--forged-opn-b', type=FileType('r'),
+      help='in case separate forged OPN\'s need to be used for both servers, this one is used for server-b and the -o file is used for server-a')
+    aparser.add_argument('-c', '--opn-cert', type=FileType('r'),
+      help='alternative certificate (PEM encoded) to use for the OPN handshake')
+    aparser.add_argument('-k', '--opn-key', type=FileType('r'),
+      help='private key (PEM encoded) associated with --opn-cert certificate')
     
-    aparser.add_arguments('server-a', 
-      help_text='host:port of the server of which to spoof the identity', 
+    aparser.add_argument('server-a', 
+      help='host:port of the server of which to spoof the identity', 
       type=address_arg)
-    aparser.add_arguments('server-b', 
-      help_text='host:port of the server on which to log in asserver-a', 
+    aparser.add_argument('server-b', 
+      help='host:port of the server on which to log in asserver-a', 
       type=address_arg)
     
   def execute(self, args):
@@ -135,7 +137,7 @@ class SigForgeAttack(Attack):
 TODO
 """.strip()
   
-  def add_arguments(aparser):
+  def add_arguments(self, aparser):
     pass
     
   def execute(self, args):
@@ -148,7 +150,7 @@ class OPNForgeAttack(Attack):
 TODO
 """.strip()
   
-  def add_arguments(aparser):
+  def add_arguments(self, aparser):
     pass
     
   def execute(self, args):
@@ -161,7 +163,7 @@ class DecryptAttack(Attack):
 TODO
 """.strip()
   
-  def add_arguments(aparser):
+  def add_arguments(self, aparser):
     pass
     
   def execute(self, args):
@@ -174,7 +176,7 @@ class MitMAttack(Attack):
 TODO
 """.strip()
   
-  def add_arguments(aparser):
+  def add_arguments(self, aparser):
     pass
     
   def execute(self, args):
@@ -187,7 +189,7 @@ ENABLED_ATTACKS = [ReflectAttack(), RelayAttack()]
 def main():
   # Create argument parser for each attack type.
   aparser = ArgumentParser(description=HELP_TEXT, formatter_class=RawDescriptionHelpFormatter)
-  subparsers = aparser.add_subparsers(metavar='attack', help='attack to test')
+  subparsers = aparser.add_subparsers(metavar='attack', help='attack to test', required=True)
   for attack in ENABLED_ATTACKS:
     sparser = subparsers.add_parser(attack.subcommand, help=attack.short_help, description=attack.long_help)
     attack.add_arguments(sparser)

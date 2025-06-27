@@ -38,7 +38,7 @@ def rsa_plainblocksize(policy: SecurityPolicy, key : RsaKey) -> int:
   return pubkey.size_in_bytes() - padsize
   
 def rsa_getcipher(policy: SecurityPolicy, key : RsaKey) -> object:
-  if policy == SecurityPolicy.NONE
+  if policy == SecurityPolicy.NONE:
     return None
   else:
     cipherclass = PKCS1_v1_5 if policy == SecurityPolicy.BASIC128RSA15 else PKCS1_OAEP
