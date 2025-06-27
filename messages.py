@@ -112,9 +112,7 @@ class OpenSecureChannelMessage(OpcMessage):
     ('securityPolicyUri', SecurityPolicyField()),
     ('senderCertificate', ByteStringField()),
     ('receiverCertificateThumbprint', ByteStringField()),
-    ('sequenceNumber', IntField()),
-    ('requestId', IntField()),
-    ('encryptedMessage', TrailingBytes()),
+    ('encodedPart', TrailingBytes()),
   ]
   
 class ConversationMessage(OpcMessage):
@@ -373,6 +371,13 @@ browseResponse = EncodableObjectField('BrowseResponse', 530, [
 # Supported extension objects.
 anonymousIdentityToken = ExtensionObjectField.register('AnonymousIdentityToken', 321, [
   ('policyId', StringField()),
+])
+
+userNameIdentityToken = ExtensionObjectField.register('UserNameIdentityToken', 324, [
+  ('policyId', StringField()),
+  ('userName', StringField()),
+  ('password', ByteStringField()),
+  ('encryptionAlgorithm', StringField()),
 ])
 
 x509IdentityToken = ExtensionObjectField.register('X509IdentityToken', 327, [

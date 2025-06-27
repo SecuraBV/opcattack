@@ -6,6 +6,8 @@ from Crypto.Hash import SHA1, SHA256
 from Crypto.Cipher import PKCS1_v1_5, PKCS1_OAEP, AES
 from Crypto.Util.Padding import pad, unpad
 
+from OpenSSL import crypto
+
 import hmac, hashlib
 
 # Asymmetric stuff for OPN messages, authentication signatures and passwords.
@@ -149,10 +151,12 @@ def macsize(policy : SecurityPolicy) -> int:
     SecurityPolicy.AES256_SHA256_RSAPSS :  32,
   }[policy]
   
-# def certificate_thumbprint(cert : bytes) -> bytes:
-#   # Computes a certificate thumbprint as used in the protocol.
-#   .... # TODO
+def certificate_thumbprint(cert : bytes) -> bytes:
+  # Computes a certificate thumbprint as used in the protocol.
+  return hashlib.new('sha1', cert).digest()
   
-# def certificate_rsakey(cert : bytes) -> (int, int):
-#   # Extracts and parses an RSA public key from a certificate, as (m, e) integers.
-#   .... # TODO
+def certificate_rsakey(cert : bytes) -> tuple[int, int]:
+  # Extracts and parses an RSA public key from a certificate, as (m, e) integers.
+  numbers = crypto.load_certificate(crypto.FILETYPE_ASN1, cert).PKey().to_cryptography_key().public_numbers()
+  return numbers.n, numbers.e
+
