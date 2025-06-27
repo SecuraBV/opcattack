@@ -1434,7 +1434,7 @@ def server_checker(url : str, test_timing_attack : bool):
     
     log('Testing OpenSecureChannel timing attack...')
     results = {}
-    for expandval in [30,50,100]:
+    for expandval in [10,30,50,100]:
       log(f'Expansion parameter {expandval}:')
       keylen = certificate_publickey(pkcs1_ep.serverCertificate).size_in_bytes()
       n, e = certificate_publickey_numbers(pkcs1_ep.serverCertificate)
