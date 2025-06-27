@@ -157,6 +157,6 @@ def certificate_thumbprint(cert : bytes) -> bytes:
   
 def certificate_rsakey(cert : bytes) -> tuple[int, int]:
   # Extracts and parses an RSA public key from a certificate, as (m, e) integers.
-  numbers = crypto.load_certificate(crypto.FILETYPE_ASN1, cert).PKey().to_cryptography_key().public_numbers()
+  numbers = crypto.load_certificate(crypto.FILETYPE_ASN1, cert).get_pubkey().to_cryptography_key().public_numbers()
   return numbers.n, numbers.e
 
