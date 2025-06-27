@@ -5,12 +5,6 @@ import struct
 from typing import *
 from dataclasses import dataclass
 
-# Thrown when trying to decode an OPC error message while expecting something else.
-class ServerError(Exception):
-  def __init__(self, errorcode, reason):
-    super().__init__(f'Server error {hex(errorcode)}: "{reason}"')
-    self.errorcode = errorcode
-
 # Main "outer" messages.
 
 class OpcMessage(ABC):
@@ -240,6 +234,7 @@ createSessionRequest = EncodableObjectField('CreateSessionRequest', 461, [
     ('requestHeader', requestHeader),
     ('clientDescription', applicationDescription),
     ('serverUri', StringField()),
+    ('endpointUrl', StringField()),
     ('sessionName', StringField()),
     ('clientNonce', ByteStringField()),
     ('clientCertificate', ByteStringField()),
@@ -352,7 +347,6 @@ browseRequest = EncodableObjectField('BrowseRequest', 527, [
   ('requestHeader', requestHeader), 
   ('view', viewDescription),
   ('requestedMaxReferencesPerNode', IntField()),
-  ('noOfNodesToBrowse', IntField('<i')),
   ('nodesToBrowse', ArrayField(browseDescription)),  
 ])
 
