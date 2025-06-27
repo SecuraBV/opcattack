@@ -167,25 +167,14 @@ def authenticated_opn(sock : socket, endpoint : endpointDescription.Type, client
       encodedPart=plaintext
     )
     
-    # Some length calculations.
-    cipherblocksize = pk.size_in_bytes()
-    base_msglen = len(msg.to_bytes())
-    plainblocksize = rsa_plainblocksize(sp, pk)
-    padbyte = plainblocksize - (base_msglen + 1) % plainblocksize
-    padding = (padbyte + 1) * bytes([padbyte]) # Redundant padding byte is a weird OPC thing
-    ctextsize = (len(plaintext) + len(padding) + cipherblocksize) // plainblocksize * cipherblocksize
-    
-    # Add padding and adjust length to obtain signature input.
-    msg.encodedPart = plaintext + padding
-    siginput = msg.to_bytes()
-    siginput = siginput[:4] + IntField().to_bytes(len(siginput) - len(plaintext) - len(padding) + ctextsize) + siginput[8:]
-    signature = rsa_sign(sp, privkey, siginput)
-    
-    # Encrypt plaintext, padding and signature.
-    print(hexlify(plaintext + padding + signature))
-    msg.encodedPart = rsa_ecb_encrypt(sp, pk, plaintext + padding + signature)
-    assert len(msg.encodedPart) == ctextsize
-    
+    # Apply signing and encryption.
+    msg.sign_and_encrypt(
+      signer=lambda data: rsa_sign(sp, privkey, data),
+      encrypter=lambda ptext: rsa_ecb_encrypt(sp, pk, ptext),
+      plainblocksize=rsa_plainblocksize(sp, pk),
+      cipherblocksize=pk.size_in_bytes(),
+      sigsize=pk.size_in_bytes(),
+    )    
     replymsg = opc_exchange(sock, msg)
     convrep, _ = encodedConversation.from_bytes(rsa_ecb_decrypt(sp, privkey, replymsg.encodedPart))
     resp, _ = openSecureChannelResponse.from_bytes(convrep.requestOrResponse)
@@ -215,6 +204,9 @@ def session_exchange(channel : ChannelState,
   
   crypto = channel.crypto
   if crypto:
+    
+    
+    
     raise Exception('TODO: bugfix session crypto')
     # Add padding and signing into encoded message.
     basemsg = msg.to_bytes()
@@ -1070,6 +1062,7 @@ def forge_opn_request(endpoint : endpointDescription.Type, opn_oracle : bool, pa
     receiverCertificateThumbprint=certificate_thumbprint(endpoint.serverCertificate),
     encodedPart=plaintext
   )
+  raise Exception('TODO: fix padding')
   padded_msg = pkcs7_pad(msg.to_bytes(), rsa_plainblocksize(sp, pk))
   
   log('First, trying sigforge attack to produce OPN signature.')
