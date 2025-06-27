@@ -11,6 +11,7 @@ from OpenSSL import crypto
 
 import hmac, hashlib
 from datetime import datetime, timedelta
+from functools import cache
 
 # Asymmetric stuff for OPN messages, authentication signatures and passwords.
 
@@ -212,13 +213,15 @@ def int2bytes(value : int, outlen : int) -> bytes:
     raise ValueError(f'{value} does not fit in {outlen} bytes.') 
   return bytes(result)
 
+@cache
+def arbitrary_keypair(bits : int) -> RsaKey:
+  return RSA.generate(bits)
+
 def decode_oaep_padding(payload : bytes, hashfunc : str) -> Optional[bytes]:
   # Can't find a good OAEP decoding implementation right now (crypto libraries don't seem to expose unpadding 
   # separately), and implementing it seems a bit of a pain to test and debug, so let's just cheat by encrypting and 
   # decrypting it with an arbitrary key pair.
-  global _oaep_keycache
-  keybits = len(payload) * 8
-  keypair = _oaep_keycache.get(keybits) or _oaep_keycache.setdefault(keybits, RSA.generate(keybits))
+  keypair = arbitrary_keypair(len(payload) * 8)
   
   hasher = {
     'sha1': SHA1,
@@ -230,7 +233,7 @@ def decode_oaep_padding(payload : bytes, hashfunc : str) -> Optional[bytes]:
     m += by
   
   try:
-    return PKCS1_OAEP(keypair, hasher).decrypt(int2bytes(pow(m, keypair.e, keypair.n)))
+    return PKCS1_OAEP.new(keypair, hasher).decrypt(int2bytes(pow(m, keypair.e, keypair.n), len(payload)))
   except:
     return None
     
