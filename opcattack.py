@@ -130,7 +130,7 @@ will try to maximize).
       help='don\'t dump server contents on success; just tell if attack worked')
     aparser.add_argument('-b', '--bypass-opn', action='store_true',
       help='when no HTTPS is available, attempt to use sigforge and decrypt attacks to bypass the opc.tcp secure channel handshake')
-    aparser.add_argument('-c', '--cache-file', type=Path, default='.spoofed-opnreqs.json',
+    aparser.add_argument('-c', '--cache-file', type=Path, default='.opncache.json',
       help='file in which to cache OPN requests with spoofed signatures; default: .opncache.json')
     add_padding_oracle_args(aparser.add_argument_group('padding oracle parameters', '(applicable if --bypass-opn is set)'))
     
