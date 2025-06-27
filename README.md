@@ -177,3 +177,11 @@ The tool will cache the result of the "first half" of the attack (i.e. the signa
 fails or halts somewhere during the "second half" (the decryption or reflection phases), you can try running the tool 
 again and the first half will be automatically skipped. 
 
+### Miscellaneous attacks
+
+The tool implements two other experimental attacks, but these are not novel protocol flaws:
+
+- `cn-inject`: attempts a path injection attack via the CN of an untrusted certificate. While in theory this would be possible against a naive implementation of the OPC UA [certificate file name conventions](https://reference.opcfoundation.org/GDS/v105/docs/F) I have not actually found an implementation (yet) that is vulnerable to this.
+- `client-downgrade`: MitM attack to downgrade encryption of a client connection, attempting to steal the user password. This is already basically a known potential flaw, however, and most implementations I found are not affected because they need the user to specify a specific security policy in the client configuration.
+
+
