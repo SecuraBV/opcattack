@@ -1,5 +1,6 @@
 from message_fields import *
 
+from Crypto.PublicKey import RSA
 from Crypto.PublicKey.RSA import RsaKey, import_key
 from Crypto.Signature import pkcs1_15, pss
 from Crypto.Hash import SHA1, SHA256
@@ -199,9 +200,52 @@ def selfsign_cert(template : bytes, cn : str, expiry : datetime) -> tuple[bytes,
   keybytes = crypto.dump_privatekey(crypto. FILETYPE_ASN1, key)
   return crypto.dump_certificate(crypto.FILETYPE_ASN1, cert), import_key(keybytes)
 
+def int2bytes(value : int, outlen : int) -> bytes:
+  # Coverts a nonnegative integer to a fixed-size big-endian binary representation.
+  result = [0] * outlen
+  j = value
+  for ix in reversed(range(0, outlen)):
+    result[ix] = j % 256
+    j //= 256
+    
+  if j != 0:
+    raise ValueError(f'{value} does not fit in {outlen} bytes.') 
+  return bytes(result)
+
 def decode_oaep_padding(payload : bytes, hashfunc : str) -> Optional[bytes]:
-  # Returns None if padding is invalid.
-  raise Exception('TODO: implement OAEP padding decoding.')
+  # Can't find a good OAEP decoding implementation right now (crypto libraries don't seem to expose unpadding 
+  # separately), and implementing it seems a bit of a pain to test and debug, so let's just cheat by encrypting and 
+  # decrypting it with an arbitrary key pair.
+  global _oaep_keycache
+  keybits = len(payload) * 8
+  keypair = _oaep_keycache.get(keybits) or _oaep_keycache.setdefault(keybits, RSA.generate(keybits))
+  
+  hasher = {
+    'sha1': SHA1,
+    'sha256': SHA256
+  }[hashfunc]
+  m = 0
+  for by in payload:
+    m *= 256
+    m += by
+  
+  try:
+    return PKCS1_OAEP(keypair, hasher).decrypt(int2bytes(pow(m, keypair.e, keypair.n)))
+  except:
+    return None
+    
+def remove_rsa_padding(payload : bytes, policy : SecurityPolicy) -> Optional[bytes]:
+  # Decode RSA padding based on security policy. Returns None if padding is incorrect.
+  assert policy != SecurityPolicy.NONE
+  if policy == SecurityPolicy.BASIC128RSA15:
+    if payload.startswith(b'\x00\x02') and b'\x00' not in result[2:9] and b'\x00' in result[10:]:
+      return payload[(payload[10:].find(b'\x00') + 11):]
+    else:
+      return None
+  elif policy == SecurityPolicy.AES256_SHA256_RSAPSS:
+    return decode_oaep_padding(payload, 'sha256')
+  else:
+    return decode_oaep_padding(payload, 'sha1')
 
 def pkcs1v15_signature_encode(hasher, msg, outlen):
   # RFC 3447 signature encoding.
