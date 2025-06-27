@@ -661,6 +661,7 @@ def rsa_decryptor(oracle : PaddingOracle, certificate : bytes, ciphertext : byte
       s0 = randint(1, n)
       c0 = c * pow(s0, e, n) % n
       if query(c0):
+        print(f'c0={c0}', flush=True)
         break
         
   test_factor = lambda sval: query(c0 * pow(sval, e, n) % n)
