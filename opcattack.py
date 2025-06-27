@@ -54,14 +54,14 @@ def add_padding_oracle_args(aparser : ArgumentParser):
 def add_mitm_args(aparser : ArgumentParser):
   """Common arguments for MitM attacks."""
   def address_arg(arg):
-    [host, port] = args.split(':')
+    [host, port] = arg.split(':')
     return host or '0.0.0.0', int(port)
   
   aparser.add_argument('-r', '--reverse-hello', type=address_arg, metavar='client-host:port',
     help='if set, will sent a ReverseHello to connect to the client')
-  aparser.add_argument('-p', '--persists', action='store_true',
+  aparser.add_argument('-p', '--persist', action='store_true',
     help='keep listening for incoming connections after starting an attack')
-  aparser.add_argument('[listen-address]:port', dest='laddress', type=address_arg,
+  aparser.add_argument('[listen-address]:port', type=address_arg,
     help='address to bind to to listen for incoming connections; when -r is set this is instead used as an endpointUrl in the ReverseHello message')
   aparser.add_argument('server-url', type=str,
     help='OPC URL of a (discovery) server whose certificate the client is expected to trust')
@@ -337,11 +337,11 @@ material such as tokens or signed nonces.
     add_mitm_args(aparser)
     
   def execute(self, args):
-    client_attack(nonegrade_mitm, args.server_url, *args.laddress, args.reverse_hello, args.persist)
+    client_attack(nonegrade_mitm, getattr(args, 'server-url'), *getattr(args,'[listen-address]:port'), args.reverse_hello, args.persist)
     
 class ByteDropMitmAttack(Attack):
   subcommand = 'client-bytedrop'
-  short_help = 'password stealing downgrade attack against a client, using the byte dropping attack'
+  short_help = 'password stealing downgrade attack against a client, using the "byte dropping" attack'
   long_help = """
 Demonstrates the byte dropping MitM attack by modifying a signed server endpoint list such that is appears to request
 the client to supply an unencrypted password. 

