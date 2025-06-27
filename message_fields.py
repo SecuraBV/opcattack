@@ -396,7 +396,7 @@ class EncodableObjectField(ObjectField):
     result, tail = super().from_bytes(bytestr)
     return result, tail
     
-  def check_type(self, bytestr) -> bool:
+  def check_type(self, bytestr : bytes) -> bool:
     return NodeIdField().from_bytes(bytestr)[0].identifier == self._id
 
 class EnumField(TransformedFieldType[int, IntEnum]):
