@@ -283,7 +283,7 @@ to show the concept in isolation or perform some follow-up attack.
       'password': (False, True),
       'try-both': (True,  True),
     }[args.padding_oracle_type]
-    forge_signature_attack(args.url, unhexlify(args.payload), opn, password, args.hash_function)
+    forge_signature_attack(args.url, unhexlify(args.payload), opn, password, SecurityPolicy.BASIC128RSA15 if args.hash_function == 'sha1' else SecurityPolicy.BASIC256)
 
 class MitMAttack(Attack):
   subcommand = 'mitm'
