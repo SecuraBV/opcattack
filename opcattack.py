@@ -84,13 +84,13 @@ WebPKI or taken from a compromised system) via --opn-cert and --opn-key.
     aparser.add_argument('-k', '--opn-key', type=FileType('r'),
       help='private key (PEM encoded) associated with --opn-cert certificate')
     
-    aparser.add_argument('address', metavar='host:port',
-      help='Target server address', 
+    aparser.add_argument('url',
+      help='Target server OPC URL (either opc.tcp or https protocol)',
       type=address_arg)
     
   def execute(self, args):
     # TODO: OPN/cert options
-    reflect_attack(args.address)
+    reflect_attack(args.url)
     
 class RelayAttack(Attack):
   subcommand = 'relay'
@@ -120,10 +120,10 @@ alternative certificate for OPN.
       help='private key (PEM encoded) associated with --opn-cert certificate')
     
     aparser.add_argument('server-a', 
-      help='host:port of the server of which to spoof the identity', 
+      help='OPC URL of the server of which to spoof the identity', 
       type=address_arg)
     aparser.add_argument('server-b', 
-      help='host:port of the server on which to log in asserver-a', 
+      help='OPC URL of the server on which to log in asserver-a', 
       type=address_arg)
     
   def execute(self, args):
