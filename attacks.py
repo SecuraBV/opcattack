@@ -233,6 +233,7 @@ def demonstrate_access(chan : ChannelState, authToken : NodeId):
   recursive_nodeclasses = {NodeClass.OBJECT}
   read_nodeclasses = {NodeClass.VARIABLE}
   
+  print(repr(viewDescription.default_value))
   def browse_from(root, depth):
     bresp = session_exchange(chan, browseRequest, browseResponse,
       requestHeader=simple_requestheader(authToken),

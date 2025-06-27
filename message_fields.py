@@ -367,8 +367,7 @@ class EncodableObjectField(ObjectField):
   def __init__(self, name : str, identifier : int, bodyfields : list[tuple[str, FieldType]]):
     super().__init__(name, [('typeId', NodeIdField()), *bodyfields])
     self._id = identifier
-    self._default = super().default_value
-    self._default.typeId.identifier = identifier
+    self._default = super().default_value._replace(typeId=NodeId(0, identifier))
     
   def create(self, **data):
     return self._Body(typeId=NodeId(0, self._id), **data)
