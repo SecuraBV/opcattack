@@ -116,10 +116,10 @@ def deriveKeyMaterial(policy: SecurityPolicy, clientNonce : bytes, serverNonce :
     serverKeys=oneside(clientNonce, serverNonce)
   )
   
-def pkcs7_pad(message : bytes, blocksize) -> bytes:
+def pkcs7_pad(message : bytes, blocksize : int) -> bytes:
   return pad(message, blocksize)
   
-def pkcs7_unpad(message : bytes, blocksize) -> bytes:
+def pkcs7_unpad(message : bytes, blocksize : int) -> bytes:
   return unpad(message, blocksize)
 
 def aes_cbc_encrypt(key : bytes, iv : bytes, padded_plaintext : bytes) -> bytes:
@@ -190,3 +190,20 @@ def selfsign_cert(template : bytes, cn : str, expiry : datetime) -> tuple[bytes,
   # Convert key to pycryptodrome object.
   keybytes = crypto.dump_privatekey(crypto. FILETYPE_ASN1, key)
   return crypto.dump_certificate(crypto.FILETYPE_ASN1, cert), import_key(keybytes)
+
+def decode_oaep_padding(payload : bytes, hashfunc : str) -> Optional[bytes]:
+  # Returns None if padding is invalid.
+  raise Exception('TODO: implement OAEP unpadding.')
+
+def pkcs1v15_signature_encode(hasher, msg, outlen):
+  # RFC 3447 signature encoding.
+  PKCS_HASH_IDS = {
+      'sha256': b'\x30\x31\x30\x0d\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x01\x05\x00\x04\x20',
+      'sha384': b'\x30\x41\x30\x0d\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x02\x05\x00\x04\x30',
+      'sha512': b'\x30\x51\x30\x0d\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x03\x05\x00\x04\x40',
+  }
+  
+  mhash = hashlib.new(hasher, msg).digest()
+  suffix = PKCS_HASH_IDS[hasher] + mhash
+  padding = b'\xff' * (outlen - len(suffix) - 3)
+  return int2bytes(b'\x00\x01' + padding + b'\x00' + suffix, outlen)
