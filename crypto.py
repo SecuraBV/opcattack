@@ -38,7 +38,7 @@ def rsa_plainblocksize(policy: SecurityPolicy, key : RsaKey) -> int:
     SecurityPolicy.AES256_SHA256_RSAPSS :  66,
   }[policy]
   
-  return pubkey.size_in_bytes() - padsize
+  return key.size_in_bytes() - padsize
   
 def rsa_getcipher(policy: SecurityPolicy, key : RsaKey) -> object:
   if policy == SecurityPolicy.NONE:
@@ -176,13 +176,13 @@ def selfsign_cert(template : bytes, cn : str, expiry : datetime) -> tuple[bytes,
   cert.set_pubkey(key)
   subject = cert.get_subject()
   subject.commonName = cn
+  cert.set_issuer(subject)
   cert.set_subject(subject)
   
   # Set validity from three days ago until expiry.
-  cert.set_issuer(subject)
   asn1format = '%Y%m%d%H%M%SZ'
-  cert.set_notBefore((datetime.now() - timedelta(days=3)).strftime(asn1format))
-  cert.set_notAfter(expiry.strftime(asn1format))
+  cert.set_notBefore((datetime.now() - timedelta(days=3)).strftime(asn1format).encode())
+  cert.set_notAfter(expiry.strftime(asn1format).encode())
   
   # Sign with the private key.
   cert.sign(key, 'sha256')

