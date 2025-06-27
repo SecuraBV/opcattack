@@ -1,0 +1,1 @@
+No README yet. But you can run `./opcattack.py -h` to get an overview of the tool's capabilities. Install dependencies via `pip install -r requirements.txt`.

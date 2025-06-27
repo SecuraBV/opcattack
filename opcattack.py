@@ -44,7 +44,7 @@ class Attack(ABC):
     
 class CheckAttack(Attack):
   subcommand = 'check'
-  short_help = 'evaluate whether attacks apply to server'
+  short_help = 'evaluate whether attacks apply to server (TODO)'
   long_help = """
 Simply requests a list of endpoints from the server, and report which attacks may be applicable based on their 
 configuration. This does not prove the endpoints are vulnerable, but helps testing a connection and determining which 
@@ -115,6 +115,8 @@ will try to maximize).
     
   def execute(self, args):
     # TODO: padding oracle options
+    if args.bypass_opn:
+      raise Exception('TODO: implement --bypass-opn option')
     reflect_attack(args.url, not args.no_demo)
     
 class RelayAttack(Attack):
@@ -148,6 +150,8 @@ information.
     
   def execute(self, args):
     # TODO: padding oracle options
+    if args.bypass_opn:
+      raise Exception('TODO: implement --bypass-opn option')
     relay_attack(getattr(args, 'server-a'), getattr(args, 'server-b'), not args.no_demo)
     
 class PathInjectAttack(Attack):
@@ -179,6 +183,7 @@ certificate, to check whether an authentication bypass payload has worked.
       help='don\'t dump server contents when an authentication bypass worked')
     aparser.add_argument('url', type=str,
       help='Target server OPC URL (either opc.tcp:// or https:// protocol)')
+    # TODO: some way to exploit AFW better by controlling certificate content
     
     
   def execute(self, args):
@@ -186,7 +191,7 @@ certificate, to check whether an authentication bypass payload has worked.
     
 class NoAuthAttack(Attack):
   subcommand = 'auth-check'
-  short_help = 'tests if server allows unauthenticated access'
+  short_help = 'tests if server allows unauthenticated access (TODO)'
   long_help = """
 This is not a new attack. Just a simple check to see whether a server allows anonymous access without authentication;
 either via the None policy or by automatically accepting untrusted certificates. 
@@ -270,6 +275,7 @@ to show the concept in isolation or perform some follow-up attack.
       help='hex-encoded payload to spoof a signature on')
     
   def execute(self, args):
+    # TODO: bugfix
     opn, password = {
       'opn'     : (True,  False),
       'password': (False, True),
@@ -279,7 +285,7 @@ to show the concept in isolation or perform some follow-up attack.
 
 class MitMAttack(Attack):
   subcommand = 'mitm'
-  short_help = 'TODO: active MitM attack on an intercepted client-server connection'
+  short_help = 'active MitM attack on an intercepted client-server connection (TODO)'
   long_help = """
 TODO
 """.strip()
@@ -291,6 +297,7 @@ TODO
     raise Exception('TODO: implement')
 
 ENABLED_ATTACKS = [
+  CheckAttack(),
   ReflectAttack(), 
   RelayAttack(), 
   PathInjectAttack(), 
