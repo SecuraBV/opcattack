@@ -44,7 +44,7 @@ class Attack(ABC):
     
 class CheckAttack(Attack):
   subcommand = 'check'
-  short_help = 'evaluate whether attacks apply to server (TODO)'
+  short_help = 'evaluate whether attacks apply to server'
   long_help = """
 Simply requests a list of endpoints from the server, and report which attacks 
 may be applicable based on their configuration. This does not prove the 
@@ -154,9 +154,8 @@ information.
       type=str)
     
   def execute(self, args):
-    # TODO: padding oracle options
     if args.bypass_opn:
-      raise Exception('TODO: implement --bypass-opn option')
+      raise Exception('TODO: --bypass-opn option implemented for reflect; but not yet for relay')
     relay_attack(getattr(args, 'server-a'), getattr(args, 'server-b'), not args.no_demo)
     
 class PathInjectAttack(Attack):
@@ -196,24 +195,32 @@ certificate, to check whether an authentication bypass payload has worked.
     
 class NoAuthAttack(Attack):
   subcommand = 'auth-check'
-  short_help = 'tests if server allows unauthenticated access (TODO)'
+  short_help = 'tests if server allows unauthenticated access'
   long_help = """
-This is not a new attack. Just a simple check to see whether a server allows anonymous access without authentication;
-either via the None policy or by automatically accepting untrusted certificates. 
+This is not a new attack. Just a simple check to see whether a server allows 
+anonymous access without authentication; either via the None policy or by 
+automatically accepting untrusted certificates.
 
-This is an easy misconfiguration to make (or insecure default to forget about), so it's good to check for this. Also,
-there's not much use for an authentication bypass if no authentication is enforced at all.
+First, a login is attempted with the None policy and a reflected server 
+certificate (of which ownership does not need to be proven). If that fails,
+a non-None policy is picked along with a self-signed certificate (same check as 
+cn-inject, but with a harmless CN).
 """
 
   def add_arguments(self, aparser):
-    pass
+    aparser.add_argument('-n', '--no-demo', action='store_true',
+      help='don\'t dump server contents on success; just tell an unauthenticated session could be created')
+    aparser.add_argument('-c', '--cert-only', action='store_true',
+      help='only attempt to log in with a self-signed certificate; skip the None attempt')
+    aparser.add_argument('url', type=str,
+      help='Target server OPC URL (either opc.tcp:// or https:// protocol)')
     
   def execute(self, args):
-    raise Exception('TODO: implement')
+    auth_check(args.url, args.cert_only, not args.no_demo)
     
 class DecryptAttack(Attack):
   subcommand = 'decrypt'
-  short_help = 'sniffed password and/or traffic decryption via an padding oracle'
+  short_help = 'sniffed password and/or traffic decryption via padding oracle'
   long_help = """
 If an OPC UA server supports the Basic128Rsa15 policy, or accepts passwords 
 encrypted with the "rsa-1_5" algorithm, it is quite likely vulnerable for a 
