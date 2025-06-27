@@ -206,9 +206,10 @@ class ArrayField(Generic[ElementType], FieldType[list[ElementType]]):
   def from_bytes(self, bytestr):
     length, todo = self._lenfield.from_bytes(bytestr)
     result = []
-    for _ in range(0, length):
-      el, todo = self._elfield.from_bytes(todo)
-      result.append(el)
+    if length != 0xffffffff:
+      for _ in range(0, length):
+        el, todo = self._elfield.from_bytes(todo)
+        result.append(el)
     return result, todo
 
   
