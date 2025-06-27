@@ -25,7 +25,7 @@ def rsa_sign(policy: SecurityPolicy, privkey : RsaKey, message : bytes) -> bytes
     SecurityPolicy.AES256_SHA256_RSAPSS :  (SHA256, pss),
   }[policy]
   
-  return signer.new().sign(hasher.new(message))
+  return signer.new(privkey).sign(hasher.new(message))
   
   
 def rsa_plainblocksize(policy: SecurityPolicy, key : RsaKey) -> int:
@@ -90,7 +90,6 @@ def prf(hasher : str, secret : bytes, seed : bytes, outlen : int) -> bytes:
     result += kdf(aval + seed)
   
   return result[:outlen]
-    
   
 def deriveKeyMaterial(policy: SecurityPolicy, clientNonce : bytes, serverNonce : bytes) -> SessionCrypto:
   ivlen = 16
@@ -193,11 +192,12 @@ def selfsign_cert(template : bytes, cn : str, expiry : datetime) -> tuple[bytes,
 
 def decode_oaep_padding(payload : bytes, hashfunc : str) -> Optional[bytes]:
   # Returns None if padding is invalid.
-  raise Exception('TODO: implement OAEP unpadding.')
+  raise Exception('TODO: implement OAEP padding decoding.')
 
 def pkcs1v15_signature_encode(hasher, msg, outlen):
   # RFC 3447 signature encoding.
   PKCS_HASH_IDS = {
+      # TODO: sha1
       'sha256': b'\x30\x31\x30\x0d\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x01\x05\x00\x04\x20',
       'sha384': b'\x30\x41\x30\x0d\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x02\x05\x00\x04\x30',
       'sha512': b'\x30\x51\x30\x0d\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x03\x05\x00\x04\x40',

