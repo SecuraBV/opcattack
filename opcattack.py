@@ -182,7 +182,7 @@ certificate, to check whether an authentication bypass payload has worked.
     
     
   def execute(self, args):
-    raise Exception('TODO: implement')
+    inject_cn_attack(args.url, args.cn, args.second_login, not args.no_demo)
     
 class NoAuthAttack(Attack):
   subcommand = 'auth-check'
