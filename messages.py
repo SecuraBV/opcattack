@@ -93,10 +93,10 @@ class OpcMessage(ABC):
     plaintext = getattr(self, trailname)
     
     # Length calculations.
-    base_msglen = len(self.to_bytes())
-    padbyte = plainblocksize - (base_msglen + 1) % plainblocksize
+    padbyte = plainblocksize - (len(plaintext) + 1 + sigsize) % plainblocksize
     padding = (padbyte + 1) * bytes([padbyte])
-    ctextsize = (len(plaintext) + len(padding) + sigsize) // plainblocksize * cipherblocksize
+    ptextsize = len(plaintext) + len(padding) + sigsize
+    ctextsize = (ptextsize // plainblocksize) * cipherblocksize
     
     # Add padding and adjust length to obtain signature input.
     setattr(self, trailname, plaintext + padding)
@@ -108,6 +108,8 @@ class OpcMessage(ABC):
     ciphertext = encrypter(plaintext + padding + signature)
     assert len(ciphertext) == ctextsize
     setattr(self, trailname, ciphertext)
+    
+    assert(len(self.to_bytes()) == len(siginput) - len(plaintext) - len(padding) + ctextsize)
     
   def sign(self, signer : Callable[[bytes], bytes], sigsize : int):
     '''Message signing without encryption and padding.'''

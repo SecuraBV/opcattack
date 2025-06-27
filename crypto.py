@@ -19,13 +19,22 @@ def rsa_sign(policy: SecurityPolicy, privkey : RsaKey, message : bytes) -> bytes
   
   hasher, signer = {
     SecurityPolicy.BASIC128RSA15 :         (SHA1,   pkcs1_15),
-    SecurityPolicy.BASIC256 :              (SHA1,   pkcs1_15),
+    SecurityPolicy.BASIC256 :              (SHA256,   pkcs1_15),
     SecurityPolicy.AES128_SHA256_RSAOAEP : (SHA256, pkcs1_15),
     SecurityPolicy.BASIC256SHA256 :        (SHA256, pkcs1_15),
     SecurityPolicy.AES256_SHA256_RSAPSS :  (SHA256, pss),
   }[policy]
   
   return signer.new(privkey).sign(hasher.new(message))
+  
+def rsa_siguri(policy: SecurityPolicy) -> str:
+  return {
+      SecurityPolicy.BASIC128RSA15 :         'http://www.w3.org/2000/09/xmldsig#rsa-sha1',
+      SecurityPolicy.BASIC256 :              'http://www.w3.org/2001/04/xmldsig-more#rsa-sha256',
+      SecurityPolicy.AES128_SHA256_RSAOAEP : 'http://www.w3.org/2001/04/xmldsig-more#rsa-sha256',
+      SecurityPolicy.BASIC256SHA256 :        'http://www.w3.org/2001/04/xmldsig-more#rsa-sha256',
+      SecurityPolicy.AES256_SHA256_RSAPSS :  'http://opcfoundation.org/UA/security/rsa-pss-sha2-256',
+  }[policy]
   
   
 def rsa_plainblocksize(policy: SecurityPolicy, key : RsaKey) -> int:
