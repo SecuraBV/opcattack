@@ -1519,12 +1519,15 @@ def auth_check(url : str, skip_none : bool, demo : bool):
           )
           
           log(f'CreateSessionRequest succeeded. Now trying to activate it...')
+          
+          anon_policies = [p for p in ep.userIdentityTokens if p.tokenType == UserTokenType.ANONYMOUS]
+          id_token = anonymousIdentityToken.create(policyId=anon_policies[0].policyId) if anon_policies else None
           activatereply = generic_exchange(chan, SecurityPolicy.NONE, activateSessionRequest, activateSessionResponse, 
             requestHeader=simple_requestheader(createreply.authenticationToken),
             clientSignature=signatureData.create(algorithm=None,signature=None),
             clientSoftwareCertificates=[],
             localeIds=[],
-            userIdentityToken=None,
+            userIdentityToken=id_token,
             userTokenSignature=signatureData.create(algorithm=None,signature=None),
           )
           log_success('Session activation successful!')
