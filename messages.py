@@ -155,6 +155,13 @@ class ConversationMessage(OpcMessage):
     ('encodedPart', TrailingBytes())
   ]
   
+class ReverseHelloMessage(OpcMessage):
+  messagetype = 'RHE'
+  fields = [
+    ('serverUri', StringField()),
+    ('endpointUrl', StringField()),
+  ]
+  
 encodedConversation = ObjectField('EncodedConversation', [
   ('sequenceNumber', IntField()),
   ('requestId', IntField()),
@@ -250,15 +257,17 @@ openSecureChannelRequest = EncodableObjectField('OpenSecureChannelRequest', 446,
     ('requestedLifetime', IntField()),
   ])
 
+channelSecurityToken = ObjectField('ChannelSecurityToken', [
+  ('channelId', IntField()),
+  ('tokenId', IntField()),
+  ('createdAt', DateTimeField()),
+  ('revisedLifetime', IntField()),
+])
+
 openSecureChannelResponse = EncodableObjectField('OpenSecureChannelResponse', 449, [
     ('responseHeader', responseHeader),
     ('serverProtocolVersion', IntField()),
-    ('securityToken', ObjectField('ChannelSecurityToken', [
-        ('channelId', IntField()),
-        ('tokenId', IntField()),
-        ('createdAt', DateTimeField()),
-        ('revisedLifetime', IntField()),
-      ])),
+    ('securityToken', channelSecurityToken),
     ('serverNonce', ByteStringField()),
   ])
 
@@ -274,19 +283,21 @@ createSessionRequest = EncodableObjectField('CreateSessionRequest', 461, [
     ('maxResponseMessageSize', IntField()),
   ])
 
+userTokenPolicy = ObjectField('UserTokenPolicy', [
+  ('policyId', StringField()),
+  ('tokenType', EnumField(UserTokenType)),
+  ('issuedTokenType', StringField()),
+  ('issuerEndpointUrl', StringField()),
+  ('securityPolicyUri', SecurityPolicyField()),
+])
+
 endpointDescription = ObjectField('EndpointDescription', [
     ('endpointUrl', StringField()),
     ('server', applicationDescription),
     ('serverCertificate', ByteStringField()),
     ('securityMode', EnumField(MessageSecurityMode)),
     ('securityPolicyUri', SecurityPolicyField()),
-    ('userIdentityTokens', ArrayField(ObjectField('UserTokenPolicy', [
-        ('policyId', StringField()),
-        ('tokenType', EnumField(UserTokenType)),
-        ('issuedTokenType', StringField()),
-        ('issuerEndpointUrl', StringField()),
-        ('securityPolicyUri', SecurityPolicyField()),
-      ]))),
+    ('userIdentityTokens', ArrayField(userTokenPolicy)),
     ('transportProfileUri', StringField()),
     ('securityLevel', IntField('<B')),
   ])
