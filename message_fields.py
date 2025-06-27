@@ -590,7 +590,7 @@ class VariantField(FieldType[Any]):
     21: LocalizedTextField(),
     22: ExtensionObjectField(),
     23: None, # DataValueField(); assigned under class definition due to mutual recursion.
-    24: UnsupportedField('nested Variant'),
+    24: None, # Same for nested variant.
     25: UnsupportedField('DiagnosticInfo'),
   }
   
@@ -631,4 +631,5 @@ class VariantField(FieldType[Any]):
     return result, todo
     
 
-VariantField._TYPE_IDS[24] = DataValueField()
+VariantField._TYPE_IDS[23] = DataValueField()
+VariantField._TYPE_IDS[24] = VariantField()
