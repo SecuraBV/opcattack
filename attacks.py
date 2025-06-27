@@ -760,7 +760,7 @@ def rsa_decryptor(oracle : PaddingOracle, certificate : bytes, ciphertext : byte
       a, b = next(iter(M_i))
       if a == b:
         print('', file=sys.stderr, flush=True)
-        m = a * pow(s0, n - 2, n) % n
+        m = a * pow(s0, -1, n) % n
         return bytes([(m >> bits) & 0xff for bits in reversed(range(0, k, 8))])
     
     i += 1
