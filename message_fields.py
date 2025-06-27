@@ -24,6 +24,7 @@ class ServerError(Exception):
   def __init__(self, errorcode, reason):
     super().__init__(f'Server error {hex(errorcode)}: "{reason}"')
     self.errorcode = errorcode
+    self.reason = reason
   
 def decodecheck(condition : bool, msg : str = 'Invalid OPC message syntax'):
   if not condition:
