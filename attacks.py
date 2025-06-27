@@ -96,8 +96,7 @@ def connect_and_hello(host : str, port : int) -> socket:
 def simple_requestheader(authToken : NodeId = NodeId(0,0)) -> requestHeader.Type:
   return requestHeader.create(
     authenticationToken=authToken,
-    # timeStamp=datetime.now(),
-    timeStamp=None,
+    timeStamp=datetime.now(),
     requestHandle=0,
     returnDiagnostics=0,
     auditEntryId=None,
