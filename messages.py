@@ -82,6 +82,43 @@ class OpcMessage(ABC):
         
     raise Exception(f'Field {fieldname} does not exist.')
     
+  def sign_and_encrypt(self, 
+    signer : Callable[[bytes], bytes], encrypter : Optional[Callable[[bytes], bytes]],
+    plainblocksize : int, cipherblocksize : int, sigsize : int
+  ):
+    '''Applies OPC's weird padding scheme and sign/encrypt combo to TrailingBytes of the message.'''
+    
+    trailname, trailtype = self.fields[-1]
+    assert isinstance(trailtype, TrailingBytes)
+    plaintext = getattr(self, trailname)
+    
+    # Length calculations.
+    base_msglen = len(self.to_bytes())
+    padbyte = plainblocksize - (base_msglen + 1) % plainblocksize
+    padding = (padbyte + 1) * bytes([padbyte])
+    ctextsize = (len(plaintext) + len(padding) + sigsize) // plainblocksize * cipherblocksize
+    
+    # Add padding and adjust length to obtain signature input.
+    setattr(self, trailname, plaintext + padding)
+    siginput = self.to_bytes()
+    siginput = siginput[:4] + IntField().to_bytes(len(siginput) - len(plaintext) - len(padding) + ctextsize) + siginput[8:]
+    signature = signer(siginput)
+    
+    # Encrypt plaintext, padding and signature.
+    ciphertext = encrypter(plaintext + padding + signature)
+    assert len(ciphertext) == ctextsize
+    setattr(self, trailname, ciphertext)
+    
+  def sign(self, signer : Callable[[bytes], bytes], sigsize : int):
+    '''Message signing without encryption and padding.'''
+    trailname, trailtype = self.fields[-1]
+    assert isinstance(trailtype, TrailingBytes)
+    siginput = self.to_bytes()
+    siginput = siginput[:4] + IntField().to_bytes(len(siginput) + sigsize) + siginput[8:]
+    signature = signer(siginput)
+    setattr(self, trailname, getattr(self, trailname) + signature)
+    
+    
 # Messages.
     
 class HelloMessage(OpcMessage): 
