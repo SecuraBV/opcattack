@@ -241,7 +241,7 @@ def remove_rsa_padding(payload : bytes, policy : SecurityPolicy) -> Optional[byt
   # Decode RSA padding based on security policy. Returns None if padding is incorrect.
   assert policy != SecurityPolicy.NONE
   if policy == SecurityPolicy.BASIC128RSA15:
-    if payload.startswith(b'\x00\x02') and b'\x00' not in result[2:9] and b'\x00' in result[10:]:
+    if payload.startswith(b'\x00\x02') and b'\x00' not in payload[2:9] and b'\x00' in payload[10:]:
       return payload[(payload[10:].find(b'\x00') + 11):]
     else:
       return None
