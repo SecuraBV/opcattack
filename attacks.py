@@ -1591,15 +1591,15 @@ def client_attack(
         ))
         return clientsock
       
-    firstround = True
-    attacker = attacker_factory(server_eps)
-    attacker.send(None)
-    while firstround or persist:
+    while True:
+      attacker = attacker_factory(server_eps)
+      attacker.send(None)
       try:
         while True:
           attacker.send(clientsocker())
       except StopIteration:
-        firstround = False
+        if not persist:
+          break
     
     if revhello_addr is None:
       listener.shutdown(SHUT_RDWR)
