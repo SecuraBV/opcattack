@@ -206,4 +206,4 @@ def pkcs1v15_signature_encode(hasher, msg, outlen):
   mhash = hashlib.new(hasher, msg).digest()
   suffix = PKCS_HASH_IDS[hasher] + mhash
   padding = b'\xff' * (outlen - len(suffix) - 3)
-  return int2bytes(b'\x00\x01' + padding + b'\x00' + suffix, outlen)
+  return b'\x00\x01' + padding + b'\x00' + suffix
