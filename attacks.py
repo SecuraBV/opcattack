@@ -1359,8 +1359,10 @@ def server_checker(url : str, test_timing_attack : bool):
       nokpads = 50
       ok_time = 0
       nok_time = 0
+      minok = math.inf
+      maxnok = 0
       for i, (padding_ok, plaintext) in enumerate(padding_oracle_testinputs(keylen, n, okpads, nokpads), start=1):
-        inputval = int2bytes(pow(plaintext, e, n), keylen)
+        inputval = int2bytes(pow(plaintext, e, n), keylen) * 100
         oracle = OPNPaddingOracle(pkcs1_ep)
         oracle._setup()
         starttime = time.time()
@@ -1373,8 +1375,10 @@ def server_checker(url : str, test_timing_attack : bool):
         log(f'Test {i}: {"good" if padding_ok else "bad"} padding; time: {duration}')
         if padding_ok:
           ok_time += duration
+          minok = min(duration, minok)
         else:
           nok_time += duration
+          maxnok = max(duration, maxnok)
         
         try:
           oracle._cleanup()
@@ -1382,6 +1386,7 @@ def server_checker(url : str, test_timing_attack : bool):
           pass
           
       log_success(f'Average time with correct padding: {ok_time / okpads}')
+      log_success(f'Shortest time with correct padding: {minok}')
       log_success(f'Average time with incorrect padding: {nok_time / nokpads}')
-        
-        
+      log_success(f'Longest time with incorrect padding: {maxnok}')
+
