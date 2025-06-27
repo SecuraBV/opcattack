@@ -46,26 +46,25 @@ class CheckAttack(Attack):
   subcommand = 'check'
   short_help = 'evaluate whether attacks apply to server (TODO)'
   long_help = """
-Simply requests a list of endpoints from the server, and report which attacks may be applicable based on their 
-configuration. This does not prove the endpoints are vulnerable, but helps testing a connection and determining which 
+Simply requests a list of endpoints from the server, and report which attacks 
+may be applicable based on their configuration. This does not prove the 
+endpoints are vulnerable, but helps testing a connection and determining which 
 attacks are worth trying.
 
-
-By default, this will be non-intrusive and only request and endpoint list. When you use --probe-password you can test 
-for an additional padding oracle attack method (that may work even if the server had disabled the Basic128Rsa15 
-security policy) by executing one login attempt with incorrect credentials.
+By default, this will be non-intrusive and only request and endpoint list. With 
+--probe-password and --test-timing-attack you can enable nosier checks that may
+yield additional results.
 """
 
   def add_arguments(self, aparser):
-    aparser.add_argument('-p', '--probe-password', type=FileType('r'),
-      help='does a failed login attempt with a PKCS#1 encrypted password')
-    
+    aparser.add_argument('-t', '--test-timing-attack', action='store_true',
+      help='test vulnerability to timing-based padding oracle by sending a bunch of ciphertexts and timing responses; output can be helpful when picking a timing attack threshold parameter')
     aparser.add_argument('url',
       help='Target or discovery server OPC URL (either opc.tcp:// or https:// protocol)',
       type=str)
     
   def execute(self, args):
-    raise Exception('TODO: implement')
+    server_checker(args.url, args.test_timing_attack)
 
 class ReflectAttack(Attack):
   subcommand = 'reflect'
