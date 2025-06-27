@@ -299,13 +299,13 @@ class ExpandedNodeIdField(FieldType[ExpandedNodeId]):
   def from_bytes(self, bytestr):
     mask, todo = bytestr[0], bytestr[1:]
     nodeId, todo = NodeIdField().from_bytes(bytes([mask & 0x0f]) + todo)
-    result = ExpandedNodeIdField(nodeId, None, None)
+    result = ExpandedNodeId(nodeId, None, None)
     if mask & 0x80:
       result.namespaceUri, todo = StringField().from_bytes(todo)
     if mask & 0x40:
       result.serverIndex, todo = IntField().from_bytes(todo)
       
-    return result
+    return result, todo
       
 class LocalizedTextField(FieldType[LocalizedText]):
   _strfield = StringField()
@@ -420,23 +420,23 @@ class TrailingBytes(FieldType[bytes]):
 class SwitchableObjectField(FieldType[NamedTuple]):
   # Object that starts with (byte-aligned) mask of which of its fields are present.
   def __init__(self, name : str, bodyfields : list[tuple[str, FieldType, int]]):
-    self._bodyfields = bodyfields
+    self._fieldtypes = [(fname, ftype) for fname, ftype, _ in bodyfields]
     self._Body = namedtuple(name, [fname for fname, _, _ in bodyfields])
     self._masksize = len(bodyfields) + (8 - len(bodyfields) % 8 if len(bodyfields) % 8 else 0)
     self._maskindices = {fname: index for fname, _, index in bodyfields}
     
   @property
   def default_value(self):
-    return self._Body(**{fname: None for fname, _ in self._bodyfields})
+    return self._Body(**{fname: None for fname, _ in self._fieldtypes})
     
   def to_bytes(self, value):
     mask = 0
     bodybytes = b''
     
-    for fname, ftype in self._bodyfields:
+    for fname, ftype in self._fieldtypes:
       element = getattr(value, fname)
       if element is not None:
-        mask |= 1 << (self._masksize - self._maskindices[fname])
+        mask |= 1 << self._maskindices[fname]
         bodybytes += ftype.to_bytes(element)
       
     maskbytes = bytes(((mask >> i) % 256 for i in range(0, self._masksize, 8)))
@@ -444,21 +444,21 @@ class SwitchableObjectField(FieldType[NamedTuple]):
     
   def from_bytes(self, bytestr):
     mask = 0
-    for maskbyte in bytestr[:self._masksize]:
+    for maskbyte in bytestr[:self._masksize // 8]:
       mask *= 256
       mask += maskbyte
-    todo = bytestr[self._masksize:]
+    todo = bytestr[self._masksize // 8:]
     
-    result = self._Body()
-    for fname, ftype in self._bodyfields:
-      if (mask >> (self._masksize - self._maskindices[fname])) & 1:
+    attributes = {}
+    for fname, ftype in self._fieldtypes:
+      if (mask >> self._maskindices[fname]) & 1:
         bodyval, todo = ftype.from_bytes(todo)
       else:
         bodyval = None
       
-      setattr(result, fname, bodyval)
-      
-    return result, todo
+      attributes[fname] = bodyval
+    
+    return self._Body(**attributes), todo
 
 class BooleanField(TransformedFieldType[int, bool]):
   def __init__(self):
@@ -612,15 +612,22 @@ class VariantField(FieldType[Any]):
     
   def from_bytes(self, bytestr):
     mask, todo = bytestr[0], bytestr[1:]
-    identifier = mask >> 2
+    identifier = mask & 0b00111111
     decodecheck(identifier in VariantField._TYPE_IDS)
-    decodecheck(mask & 0b00000010 != 0, 'Variant array dimensions not supported.')
     
     fieldType = VariantField._TYPE_IDS[identifier]
-    if mask & 0b00000001:
-      return ArrayField(fieldType).from_bytes(todo)
+    if mask & 0b10000000:
+      result, todo = ArrayField(fieldType).from_bytes(todo)
     else:
-      return fieldType.from_bytes(todo)
+      result, todo = fieldType.from_bytes(todo)
+    
+    if mask & 0b01000000:
+      # For now, just drop dimension info and return flattened array.
+      dimensions, todo = IntField().from_bytes(todo)
+      for _ in range(0, dimensions):
+        _, todo = IntField().from_bytes(todo)
+    
+    return result, todo
     
 
 VariantField._TYPE_IDS[24] = DataValueField()
