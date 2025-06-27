@@ -106,7 +106,7 @@ def deriveKeyMaterial(policy: SecurityPolicy, clientNonce : bytes, serverNonce :
     return OneSideSessionKeys(
       signingKey=keydata[0:siglen],
       encryptionKey=keydata[siglen:siglen+enclen],
-      iv=keydata[siglen+enclen:ivlen],
+      iv=keydata[siglen+enclen:siglen+enclen+ivlen],
     )
   
   return SessionCrypto(

