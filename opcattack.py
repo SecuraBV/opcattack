@@ -10,10 +10,6 @@ HELP_TEXT = """
 Proof of concept tool for attacks against the OPC UA security protocol.
 """.strip()
 
-def address_arg(addr_string):
-  [host, port] = addr_string.split(':')
-  return host, int(port)
-
 class Attack(ABC):
   """Base class for OPC attack defintions."""
   
@@ -86,7 +82,7 @@ WebPKI or taken from a compromised system) via --opn-cert and --opn-key.
     
     aparser.add_argument('url',
       help='Target server OPC URL (either opc.tcp or https protocol)',
-      type=address_arg)
+      type=str)
     
   def execute(self, args):
     # TODO: OPN/cert options
@@ -121,10 +117,10 @@ alternative certificate for OPN.
     
     aparser.add_argument('server-a', 
       help='OPC URL of the server of which to spoof the identity', 
-      type=address_arg)
+      type=str)
     aparser.add_argument('server-b', 
       help='OPC URL of the server on which to log in asserver-a', 
-      type=address_arg)
+      type=str)
     
   def execute(self, args):
     # TODO: OPN/cert options
@@ -197,7 +193,10 @@ def main():
     
   # Parse args and execute attack.
   args = aparser.parse_args()
-  args.attack_obj.execute(args)
+  try:
+    args.attack_obj.execute(args)
+  except AttackNotPossible as ex:
+    print(f'[-] Attack failed: {ex}')
   
   
 if __name__ == '__main__':
