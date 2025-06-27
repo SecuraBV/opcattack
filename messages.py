@@ -38,6 +38,7 @@ class OpcMessage(ABC):
     # Returns whether this is the final chunk.
     
     mtype = reader.read(3)
+    decodecheck(len(mtype) == 3, 'Connection unexpectedly terminated.')
     decodecheck(mtype == self.messagetype.encode() or mtype == b'ERR', 'Unexpected message type')
     
     ctype = reader.read(1)
