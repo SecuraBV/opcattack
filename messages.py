@@ -5,6 +5,12 @@ import struct
 from typing import *
 from dataclasses import dataclass
 
+# Thrown when trying to decode an OPC error message while expecting something else.
+class ServerError(Exception):
+  def __init__(self, errorcode, reason):
+    super().__init__(f'Server error {hex(errorcode)}: "{reason}"')
+    self.errorcode = errorcode
+
 # Main "outer" messages.
 
 class OpcMessage(ABC):
@@ -36,25 +42,31 @@ class OpcMessage(ABC):
     else:
       bodychunks = [body[i:i+chunksize] for i in range(0, len(body), chunksize)]
     
-    bodychunks = [struct.pack('<I', len(chunk) + 4) + chunk for chunk in bodychunks]
+    bodychunks = [struct.pack('<I', len(chunk) + 8) + chunk for chunk in bodychunks]
     return b''.join(mtype + b'C' + chunk for chunk in bodychunks[:-1]) + mtype + b'F' + bodychunks[-1]
 
   def from_bytes(self, reader : BinaryIO):
-    mtype = reader.read(3)
-    decodecheck(mtype == self.messagetype.encode(), 'Unexpected message type')
+    mtype = reader.read(3)    
+    decodecheck(mtype == self.messagetype.encode() or mtype == b'ERR', 'Unexpected message type')
     
     body = b''
     ctype = reader.read(1)
     
     while ctype == b'C':
-      chunklen = struct.unpack('<I', reader.read(4))[0]
+      chunklen = struct.unpack('<I', reader.read(4))[0] - 8
       body += reader.read(chunklen)
       decodecheck(reader.read(3) == mtype, 'Changing message type after chunk')
       ctype = reader.read(1)  
     
     decodecheck(ctype == b'F')
-    finallen = struct.unpack('<I', reader.read(4))[0]
+    finallen = struct.unpack('<I', reader.read(4))[0] - 8
     body += reader.read(finallen)
+    
+    if mtype == b'ERR' and self.messagetype != 'ERR':
+      # Server error. Parse for exception.
+      errorcode, tail = IntField().from_bytes(body)
+      reason, _ = StringField().from_bytes(tail)
+      raise ServerError(errorcode, reason)
     
     for name, ftype in self.fields:
       value, body = ftype.from_bytes(body)
@@ -215,7 +227,7 @@ openSecureChannelRequest = EncodableObjectField('OpenSecureChannelRequest', 446,
 openSecureChannelResponse = EncodableObjectField('OpenSecureChannelResponse', 449, [
     ('responseHeader', responseHeader),
     ('serverProtocolVersion', IntField()),
-    ('securityToken', EncodableObjectField('ChannelSecurityToken', 443, [
+    ('securityToken', ObjectField('ChannelSecurityToken', [
         ('channelId', IntField()),
         ('tokenId', IntField()),
         ('createdAt', DateTimeField()),

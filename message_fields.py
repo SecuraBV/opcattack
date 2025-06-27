@@ -108,17 +108,20 @@ class DoubleField(StructField[float]):
   def __init__(self, floatformat : str = '<d'):
     super().__init__(floatformat)
     
-class ByteStringField(FieldType[bytes]):
+class ByteStringField(FieldType[Optional[bytes]]):
   _lentype = IntField()
   
   default_value = b''
   
   def to_bytes(self, value):
-    return _lentype.to_bytes(len(value)) + value
+    return self._lentype.to_bytes(len(value)) + value if value is not None else b'\xff\xff\xff\xff'
     
   def from_bytes(self, bytestr):
-    length, rest = _lentype.from_bytes(bytestr)
-    return rest[:length], rest[length:]
+    if bytestr.startswith(b'\xff\xff\xff\xff'):
+      return None, bytestr[4:]
+    else:
+      length, rest = self._lentype.from_bytes(bytestr)
+      return rest[:length], rest[length:]
     
 class FixedBytes(FieldType[NoneType]):
   def __init__(self, bytestr : bytes):
@@ -157,20 +160,20 @@ class TransformedFieldType(Generic[ValType, OriginalValType], FieldType[ValType]
     return self._origfield.to_bytes(self.untransform(value))
     
   def from_bytes(self, bytestr):
-    val, rest = self.origfield.from_bytes(bytestr)
+    val, rest = self._origfield.from_bytes(bytestr)
     return self.transform(val), rest
     
-class StringField(TransformedFieldType[bytes, Optional[str]]):
+class StringField(TransformedFieldType[Optional[bytes], Optional[str]]):
   """"OPC Null string is translated to Python None."""
   
   def __init__(self):
     super().__init__(ByteStringField())
   
   def transform(self, original):
-    return original.decode() if original != b'\xff\xff\xff\xff' else None
+    return original.decode() if original is not None else None
     
   def untransform(self, transformed):
-    return transformed.encode() if transformed is not None else  b'\xff\xff\xff\xff'
+    return transformed.encode() if transformed is not None else None
     
 class DateTimeField(TransformedFieldType[int, Optional[datetime]]):
   def __init__(self):
@@ -192,15 +195,15 @@ class ArrayField(Generic[ElementType], FieldType[list[ElementType]]):
   default_value = []
     
   def to_bytes(self, value):
-    return self._lentype.to_bytes(len(value)) + b''.join(self._elfield.to_bytes(el) for el in value)
+    return self._lenfield.to_bytes(len(value)) + b''.join(self._elfield.to_bytes(el) for el in value)
     
   def from_bytes(self, bytestr):
-    length, todo = self._lentype.from_bytes(bytestr)
+    length, todo = self._lenfield.from_bytes(bytestr)
     result = []
     for _ in range(0, length):
       el, todo = self._elfield.from_bytes(todo)
       result.append(el)
-    return result
+    return result, todo
 
   
 class SecurityPolicyField(TransformedFieldType[str, SecurityPolicy]):
@@ -340,12 +343,12 @@ class ObjectField(FieldType[NamedTuple]):
     return b''.join(ftype.to_bytes(getattr(value, fname)) for fname, ftype in self._bodyfields)
     
   def from_bytes(self, bytestr):
-    result = self._Body()
+    data = {}
     todo = bytestr
     for fname, ftype in self._bodyfields:
       bodyval, todo = ftype.from_bytes(todo)
-      setattr(result, fname, bodyval)
-    return result, todo
+      data[fname] = bodyval
+    return self._Body(**data), todo
     
   @property
   def Type(self):
@@ -357,6 +360,9 @@ class EncodableObjectField(ObjectField):
     self._id = identifier
     self._default = super().default_value
     self._default.typeId.identifier = identifier
+    
+  def create(self, **data):
+    return self._Body(typeId=NodeId(0, self._id), **data)
     
   @property
   def default_value(self):
@@ -496,16 +502,18 @@ class ExtensionObjectField(FieldType[Optional[NamedTuple]]):
     
   def to_bytes(self, value):
     if value is None:
-      return NodeIdField().to_bytes(0) + b'\x00'
+      return NodeIdField().to_bytes(NodeId(0,0)) + b'\x00'
     elif type(value) in ExtensionObjectField._ty2id:
       identifier = ExtensionObjectField._ty2id[type(value)]
       fieldType = ExtensionObjectField._id2ft[identifier]
-      return NodeIdField().to_bytes(identifier) + b'\x01' + ByteStringField().to_bytes(fieldType.to_bytes(value))
+      return NodeIdField().to_bytes(NodeId(0,identifier)) + b'\x01' + ByteStringField().to_bytes(fieldType.to_bytes(value))
     else:
       raise Exception(f'Type {type(value)} not registered as extension object.')
     
   def from_bytes(self, bytestr):
-    identifier, todo = NodeIdField().from_bytes(bytestr)
+    nodeId, todo = NodeIdField().from_bytes(bytestr)
+    decodecheck(nodeId.namespace == 0)
+    identifier = nodeId.identifier
     decodecheck(todo)
     encoding, todo = todo[0], todo[1:]
     decodecheck(encoding != 2, 'XML encoding not supported.')
