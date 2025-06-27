@@ -275,7 +275,6 @@ to show the concept in isolation or perform some follow-up attack.
       help='hex-encoded payload to spoof a signature on')
     
   def execute(self, args):
-    # TODO: bugfix
     opn, password = {
       'opn'     : (True,  False),
       'password': (False, True),
